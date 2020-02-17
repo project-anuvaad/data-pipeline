@@ -1,0 +1,9 @@
+src/libs
+dist
+build
+tmp
+
+# Byte-compiled
+__pycache__/
+*$py.class
+.DS_Store
