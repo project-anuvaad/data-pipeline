@@ -49,7 +49,7 @@ The code has been tested on HDP 3.1.4 and Airflow 1.10.7 stack.
 READ THE CONFIG & LOAD THE VARIABLE
 ---------------------------------------
 '''
-CONFIG_FILE   = '/usr/local/airflow/dags/config.yml'
+CONFIG_FILE   = '/usr/local/airflow/dags/config/config.yml'
 CONFIG_DB_KEY = 'anuvaad_config'
 
 with open(CONFIG_FILE) as file:
