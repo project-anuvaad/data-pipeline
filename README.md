@@ -1,11 +1,11 @@
-# Big data pipeline for general purpose corpus
+# Big Data Pipeline For General Purpose Corpus Translation
 
 This document is designed to understand the Big Data pipeline that is built for the multiple use cases under Anuvaad project. 
 This should be read in parallel with the code under `project-anuvaad/data-pipeline` repository. Together, these constitute what we consider to be a scalable and automated solution to writing amd scheduling ETL jobs using Apache Spark (PySpark) and Airflow. This project includes the following :
 
 - Core ETL processing using PySpark
 - The ML based workflow using Airflow
-- Default configuration for 
+- Default configuration for the translation pipeline
 
 ## ETL Project Structure
 
