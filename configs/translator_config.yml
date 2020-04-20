@@ -1,0 +1,28 @@
+# Sample YAML config file for generating the parallel corpus files
+# Please note this is a demo file, things can be added or removed as per requirements.
+# Config will be always having this set of properties
+# All the properties mentioned in the config file will be verified before processing.
+
+config_name: "Translator-Config"
+
+#Model Translation API URL.
+url: "http://52.40.71.62:3003/translator/translate-anuvaad"
+
+# Source Language of the file.
+source_language: "en"
+
+# Target Language of the file
+target_language: "hi"
+
+# Input File Directory
+source_folder: "/user/root/source_files/*.csv"
+
+# Output File Directory
+target_folder: "/user/root/translated"
+
+# Regex Pattern to get the file name from file path
+regex_pattern: "[\/]([^\/]+[\/][^\/]+)$"
+
+hbase_server: "sandbox-hdp.hortonworks.com"
+
+hbase_table: "translated_sentences"
