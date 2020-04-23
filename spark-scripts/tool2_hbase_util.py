@@ -42,9 +42,9 @@ def store_translation(source_sentence, target_sentence, source_language, target_
     print('store_translation for: '+ source_language + '-' + target_language )
     try:
         
-        source_sentence = source_sentence
-        target_sentence = target_sentence.encode('UTF-8','strict')
-        encoded_str = hashlib.sha256(source_sentence.encode())
+        source_sentence = source_sentence.encode(encoding="utf-8",errors="strict")
+        target_sentence = target_sentence.encode(encoding="utf-8",errors="strict")
+        encoded_str = hashlib.sha256(source_sentence)
         hash_hex = encoded_str.hexdigest()
         row_key=target_language+"_"+hash_hex
         print(row_key) 
@@ -65,8 +65,8 @@ def get_translation(source_sentence, source_language, target_language):
 
     print('get_translation for: '+source_language + '-' + target_language )
     try:
-        source_sentence = source_sentence
-        encoded_str = hashlib.sha256(source_sentence.encode())
+        source_sentence = source_sentence.encode(encoding="utf-8",errors="strict")
+        encoded_str = hashlib.sha256(source_sentence)
         hash_hex = encoded_str.hexdigest()
         print(hash_hex)
 
@@ -76,9 +76,15 @@ def get_translation(source_sentence, source_language, target_language):
         print(row_key) 
         row = table.row(row_key)
         if row:      
-           translated_sentence = row[b'info:target_sentence'].decode('UTF-8','strict')
+           translated_sentence = row[b'info:target_sentence'].decode(encoding="utf-8",errors="strict")
         else:
            translated_sentence=""
         return translated_sentence
     except Exception as e:
         print('get_translation : Error occurred in getting the translation '', error is == ' + str(e))
+
+
+
+
+
+
