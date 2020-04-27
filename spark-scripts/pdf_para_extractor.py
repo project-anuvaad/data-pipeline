@@ -49,7 +49,6 @@ SPARK SESSION CREATION
 spark = SparkSession \
     .builder \
     .appName("Anuvaad_Pdf_Para_Extractor") \
-    .config("spark.executor.memory", "2g") \
     .getOrCreate()
 
 LOG4JLOGGER = spark.sparkContext._jvm.org.apache.log4j
@@ -95,26 +94,27 @@ def parse_html_tags(x):
     # ######################
     style_map = dict()
     for line in soup.find_all("style"):
-      for entry in line.text.split():
-        style_values = re.search('.(.*){(.*)font-size:([0-9]*)px;(.*)font-family:(.*);(.*)color:(.*);(.*)', entry, re.IGNORECASE)
-        if style_values:
-          style_map[style_values.group(1)] = (style_values.group(3) + style_values.group(5) + style_values.group(7))
+        for entry in line.text.split():
+            style_values = re.search('.(.*){(.*)font-size:([0-9]*)px;(.*)font-family:(.*);(.*)color:(.*);(.*)', entry, re.IGNORECASE)
+            if style_values:
+                style_map[style_values.group(1)] = (style_values.group(3) + style_values.group(5) + style_values.group(7))
     # ######################
     # print(style_map)
     # ######################
     formatted_text = []
     for line in soup.find_all("p"):
-      # Remove unwanted tags
-      clean_line = str(line).replace('<br/>','').replace('<i>','').replace('<i/>','')
-      # Make the sentence single-spaced and remove leading/trailing spaces
-      clean_line = ' '.join(clean_line.split()).strip()
-      # Extract the required sections (class, mapped style, p style, actual text)
-      para_reg = re.search('<p class="(.*)" style=\"(.*)\">(.*)</p>', clean_line)
-      formatted_text += ['{0}\t{1}\t{2}\t{3}'.format(para_reg.group(1), style_map.get(para_reg.group(1)), para_reg.group(2), para_reg.group(3))]
+        # Remove unwanted tags
+        clean_line = str(line).replace('<br/>','').replace('<i>','').replace('<i/>','')
+        # Make the sentence single-spaced and remove leading/trailing spaces
+        clean_line = ' '.join(clean_line.split()).strip()
+        # Extract the required sections (class, mapped style, p style, actual text)
+        para_reg = re.search('<p class="(.*)" style=\"(.*)\">(.*)</p>', clean_line)
+        formatted_text += ['{0}\t{1}\t{2}\t{3}'.format(para_reg.group(1), style_map.get(para_reg.group(1)), para_reg.group(2), para_reg.group(3))]
     map['formatted_text'] = str(formatted_text)
     return map
 
 TITLE_UDF = F.udf(parse_html_tags, MapType(StringType(), StringType()))
+
 
 
 # Define the UDF to get the line coordinates from an image
@@ -157,7 +157,7 @@ def extract_line_coords(binary_images):
 rdd = spark.sparkContext.wholeTextFiles(INPUT_HTML_DOCS, NUM_PARTITIONS)
 
 # Confirm the number of Partitions
-LOGGER.info("Number of partitions : ",format(rdd.getNumPartitions()))
+LOGGER.info("Number of partitions : + format(rdd.getNumPartitions())")
 
 
 # glom()- return an RDD created by coalescing all elements within each partition into a list
@@ -223,7 +223,6 @@ def parse_para(x, doc_p_style):
             else:
                 para_text += ' '
     if(para_text.strip() != ''): paragraphs_list += [para_text]
-
     return paragraphs_list
 
 
@@ -239,5 +238,6 @@ FINAL_PARA_DF.count()
 # #############################
 images_rdd = spark.sparkContext.binaryFiles(INPUT_IMAGES)
 line_coord_df = images_rdd.map(lambda img: extract_line_coords(img)).toDF()
-line_coord_df.show(20, False)
-
+line_coord_exp_df =line_coord_df.select("_1", F.explode("_2"))
+line_coord_exp_df =line_coord_df.select(F.col("_1").alias("filename"), F.explode(F.col("_2")).alias("coord"))
+line_coord_exp_df.show(20, False)
