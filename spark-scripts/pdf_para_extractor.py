@@ -22,7 +22,7 @@ from bs4 import BeautifulSoup
 
 from pyspark.sql import SQLContext
 from pyspark.sql import SparkSession
-from pyspark.sql.types import ArrayType, MapType, StringType, StructType, StructField
+from pyspark.sql.types import ArrayType, BooleanType, MapType, StringType, StructType, StructField
 
 
 
@@ -199,11 +199,17 @@ para_style = MAX_OCCURANCE_DF.select('style_key').first().style_key
 
 
 # Define UDF
+# x is the set of lines containing class, style_key, line style & line text
+# doc_p_style is the derived paragraph style for the entire document.
 def parse_para(x, doc_p_style):
-    paragraphs_list = []
+    out_para_list = []
+    # Just pick the first style for the entire para
+    out_style_list = []
+    out_bold_list = []
     end_of_sent_re = """(([\"|”|,|a-zA-Z|0-9|.]{3,}[.|?|!|\"|”|:|;]|([:][ ][-]))$)"""
     lines = parse_array_from_string(x)
     para_text = ''
+    para_style = ''
     for line in lines:
         parts = line.split('\t')
         l_class_val  = parts[0].strip()
@@ -211,26 +217,44 @@ def parse_para(x, doc_p_style):
         l_p_style    = parts[2].strip()
         l_p_text     = parts[3].strip()
         sentence_end = re.search(end_of_sent_re, l_p_text, re.IGNORECASE)
+
+        if(para_text == ''):
+            para_style   = l_p_style
+        # Dummy for now. Fix below :
+        out_bold_list += (False,)
         if(l_style_key != doc_p_style):
-            if(para_text.strip() != ''): paragraphs_list += [para_text]
+            if(para_text.strip() != ''):
+                out_para_list += [para_text]
+                out_style_list += [para_style]
             para_text = ''
         else:
             para_text += l_p_text
             if(sentence_end):
                 if(para_text.strip() != ''):
-                    if(para_text.strip() != ''): paragraphs_list += [para_text]
+                    if(para_text.strip() != ''):
+                        out_para_list += [para_text]
+                        out_style_list += [para_style]
                 para_text = ''
             else:
                 para_text += ' '
-    if(para_text.strip() != ''): paragraphs_list += [para_text]
-    return paragraphs_list
+    if(para_text.strip() != ''):
+        out_para_list += [para_text]
+    return out_para_list, out_style_list, out_bold_list
 
 
-PARSE_PARA_UDF = F.udf(parse_para, T.ArrayType(T.StringType()))
+parse_para_schema = T.StructType([
+    T.StructField('para_list', T.ArrayType(T.StringType()), False),
+    T.StructField('para_style', T.ArrayType(T.StringType()), False),
+    T.StructField('is_bold', T.ArrayType(T.StringType()), False),
+])
 
-FINAL_PARA_DF = FORMATTED_SENT_DF.select(F.explode(PARSE_PARA_UDF(F.col("value"), F.lit(para_style))))
+PARSE_PARA_UDF = F.udf(parse_para, parse_para_schema)
+
+FINAL_PARA_DF = FORMATTED_SENT_DF.select((PARSE_PARA_UDF(F.col("value"), F.lit(para_style))).alias('metrics')).select(F.col('metrics.*'))
 FINAL_PARA_DF.count()
 
+fpd = FINAL_PARA_DF.withColumn("tmp", F.arrays_zip("para_list", "para_style", "is_bold")).withColumn("tmp", F.explode("tmp")).select(F.col("tmp.para_list"), F.col("tmp.para_style"), F.col("tmp.is_bold"))
+fpd.show(1, False)
 
 
 # #############################
