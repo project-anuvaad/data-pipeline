@@ -178,24 +178,13 @@ FILENAME_EXT_UDF = F.udf(lambda x : os.path.basename(x), StringType())
 TRIM_FN_DF = EXPLODED_DF.select(FILENAME_EXT_UDF(EXPLODED_DF.filepath).alias("filename"), EXPLODED_DF.key, EXPLODED_DF.value)
 
 
-# DEBUG STMTS
-###############
+# Section identifies the style of the paragraph (constant across the entire doc)
 FORMATTED_SENT_DF = TRIM_FN_DF.filter("key='formatted_text'").select("value")
-# EXPLODED_SENT_DF = FORMATTED_SENT_DF.withColumn("new_col", F.explode(RETRIEVE_ARRAY_UDF(F.col("value"))))
 EXPLODED_SENT_DF = FORMATTED_SENT_DF.select(F.explode(RETRIEVE_ARRAY_UDF(F.col("value"))))
-
 split_col = F.split(EXPLODED_SENT_DF['col'], '\t')
-# EXPLODED_SENT_DF = EXPLODED_SENT_DF.withColumn('class_val', split_col.getItem(0))
 EXPLODED_SENT_DF = EXPLODED_SENT_DF.withColumn('style_key', split_col.getItem(1))
-# EXPLODED_SENT_DF = EXPLODED_SENT_DF.withColumn('p_style', split_col.getItem(2))
-# EXPLODED_SENT_DF = EXPLODED_SENT_DF.withColumn('p_text', split_col.getItem(3))
-# EXPLODED_SENT_DF.show()
-
 MAX_OCCURANCE_DF = EXPLODED_SENT_DF.groupBy("style_key").count().sort(F.desc("count"))
 para_style = MAX_OCCURANCE_DF.select('style_key').first().style_key
-#print(para_style)
-
-###############
 
 
 # Define UDF
@@ -217,7 +206,6 @@ def parse_para(x, doc_p_style):
         l_p_style    = parts[2].strip()
         l_p_text     = parts[3].strip()
         sentence_end = re.search(end_of_sent_re, l_p_text, re.IGNORECASE)
-
         if(para_text == ''):
             para_style   = l_p_style
         # Dummy for now. Fix below :
