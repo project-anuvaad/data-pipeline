@@ -65,9 +65,14 @@ VARIABLES
 '''
 
 CONVERTED_OUT_DIR = "/tmp/html_out/out"
-INPUT_HTML_DOCS = CONVERTED_OUT_DIR + "-*.html"
-INPUT_IMAGES = CONVERTED_OUT_DIR + "*.png"
-NUM_PARTITIONS = 10
+INPUT_HTML_DOCS   = CONVERTED_OUT_DIR + "-*.html"
+INPUT_IMAGES      = CONVERTED_OUT_DIR + "*.png"
+NUM_PARTITIONS    = 10
+# Define Regex
+END_OF_SENT_REGEX = """(([\"|”|,|a-zA-Z|0-9|.]{3,}[.|?|!|\"|”|:|;]|([:][ ][-]))$)"""
+STYLE_REGEX       = """.(.*){(.*)font-size:([0-9]*)px;(.*)font-family:(.*);(.*)color:(.*);(.*)"""
+TOP_REGEX         = """(.*)(top:)([0-9]*)(.*)"""
+LEFT_REGEX        = """(.*)(left:)([0-9]*)(.*)"""
 
 
 # Define sql Context
@@ -88,14 +93,15 @@ def parse_html_tags(x):
     map = dict()
     para = ''
     soup = BeautifulSoup (x, 'html.parser')
-    map['page_no'] = str(soup.title.string)
+    # Extact the numeric value alone
+    map['page_no'] = str(soup.title.string).split()[1]
     # ######################
     # MAP FOR STYLES - Extract Font size, family & color
     # ######################
     style_map = dict()
     for line in soup.find_all("style"):
         for entry in line.text.split():
-            style_values = re.search('.(.*){(.*)font-size:([0-9]*)px;(.*)font-family:(.*);(.*)color:(.*);(.*)', entry, re.IGNORECASE)
+            style_values = re.search(STYLE_REGEX, entry, re.IGNORECASE)
             if style_values:
                 style_map[style_values.group(1)] = (style_values.group(3) + style_values.group(5) + style_values.group(7))
     # ######################
@@ -113,7 +119,7 @@ def parse_html_tags(x):
     map['formatted_text'] = str(formatted_text)
     return map
 
-TITLE_UDF = F.udf(parse_html_tags, MapType(StringType(), StringType()))
+PARSE_HTML_TAGS_UDF = F.udf(parse_html_tags, MapType(StringType(), StringType()))
 
 
 
@@ -168,7 +174,7 @@ SCHEMA_INPUT_FILE = StructType([StructField("filepath", StringType(), True), Str
 HTML_DF = sqlContext.createDataFrame(rdd, SCHEMA_INPUT_FILE)
 
 #Invoke the UDF to parse out the HTML tags
-APPEND_DF = HTML_DF.withColumn("metadata", TITLE_UDF(HTML_DF.html_page_tags))
+APPEND_DF = HTML_DF.withColumn("metadata", PARSE_HTML_TAGS_UDF(HTML_DF.html_page_tags))
 
 # Explode to form key-value pairs.
 EXPLODED_DF = APPEND_DF.select(APPEND_DF.filepath, F.explode(APPEND_DF.metadata))
@@ -180,11 +186,11 @@ TRIM_FN_DF = EXPLODED_DF.select(FILENAME_EXT_UDF(EXPLODED_DF.filepath).alias("fi
 
 # Section identifies the style of the paragraph (constant across the entire doc)
 FORMATTED_SENT_DF = TRIM_FN_DF.filter("key='formatted_text'").select("value")
-EXPLODED_SENT_DF = FORMATTED_SENT_DF.select(F.explode(RETRIEVE_ARRAY_UDF(F.col("value"))))
-split_col = F.split(EXPLODED_SENT_DF['col'], '\t')
-EXPLODED_SENT_DF = EXPLODED_SENT_DF.withColumn('style_key', split_col.getItem(1))
-MAX_OCCURANCE_DF = EXPLODED_SENT_DF.groupBy("style_key").count().sort(F.desc("count"))
-para_style = MAX_OCCURANCE_DF.select('style_key').first().style_key
+EXPLODED_SENT_DF  = FORMATTED_SENT_DF.select(F.explode(RETRIEVE_ARRAY_UDF(F.col("value"))))
+split_col         = F.split(EXPLODED_SENT_DF['col'], '\t')
+EXPLODED_SENT_DF  = EXPLODED_SENT_DF.withColumn('style_key', split_col.getItem(1))
+MAX_OCCURANCE_DF  = EXPLODED_SENT_DF.groupBy("style_key").count().sort(F.desc("count"))
+para_style        = MAX_OCCURANCE_DF.select('style_key').first().style_key
 
 
 # Define UDF
@@ -192,64 +198,89 @@ para_style = MAX_OCCURANCE_DF.select('style_key').first().style_key
 # doc_p_style is the derived paragraph style for the entire document.
 def parse_para(x, doc_p_style):
     out_para_list = []
-    # Just pick the first style for the entire para
+    # Pick the first style for the entire para
     out_style_list = []
-    out_bold_list = []
-    end_of_sent_re = """(([\"|”|,|a-zA-Z|0-9|.]{3,}[.|?|!|\"|”|:|;]|([:][ ][-]))$)"""
+    out_bold_list  = []
+    out_y_end_list = []
     lines = parse_array_from_string(x)
-    para_text = ''
-    para_style = ''
+    para_text    = ''
+    para_style   = ''
+    prev_top_val = ''
+    curr_top_val = ''
     for line in lines:
-        parts = line.split('\t')
+        parts        = line.split('\t')
         l_class_val  = parts[0].strip()
         l_style_key  = parts[1].strip()
         l_p_style    = parts[2].strip()
         l_p_text     = parts[3].strip()
-        sentence_end = re.search(end_of_sent_re, l_p_text, re.IGNORECASE)
+        sentence_end = re.search(END_OF_SENT_REGEX, l_p_text, re.IGNORECASE)
         if(para_text == ''):
-            para_style   = l_p_style
+            para_style = l_p_style
+        # Extract Top Value
+        style_values = re.search(TOP_REGEX, l_p_style, re.IGNORECASE)
+        if style_values:
+            curr_top_val = style_values.group(3)
         # Dummy for now. Fix below :
         out_bold_list += (False,)
         if(l_style_key != doc_p_style):
-            if(para_text.strip() != ''):
-                out_para_list += [para_text]
+            # Case : Same line with different styles. Ex : Bold
+            if(prev_top_val == curr_top_val):
+                para_text += l_p_text
+                para_text += ' '
+            elif(para_text.strip() != ''):
+                out_para_list  += [para_text]
                 out_style_list += [para_style]
-            para_text = ''
+                out_y_end_list += [curr_top_val]
+                para_text = ''
+            prev_top_val = ''
         else:
             para_text += l_p_text
             if(sentence_end):
                 if(para_text.strip() != ''):
                     if(para_text.strip() != ''):
-                        out_para_list += [para_text]
+                        out_para_list  += [para_text]
                         out_style_list += [para_style]
+                        out_y_end_list += [curr_top_val]
                 para_text = ''
             else:
                 para_text += ' '
+            prev_top_val = curr_top_val
+    # Flush remaining para
     if(para_text.strip() != ''):
-        out_para_list += [para_text]
-    return out_para_list, out_style_list, out_bold_list
+        out_para_list  += [para_text]
+        out_style_list += [para_style]
+        out_y_end_list += [curr_top_val]
+    return out_para_list, out_style_list, out_bold_list, out_y_end_list
 
 
 parse_para_schema = T.StructType([
     T.StructField('para_list', T.ArrayType(T.StringType()), False),
     T.StructField('para_style', T.ArrayType(T.StringType()), False),
     T.StructField('is_bold', T.ArrayType(T.StringType()), False),
+    T.StructField('y_end', T.ArrayType(T.StringType()), False),
 ])
 
 PARSE_PARA_UDF = F.udf(parse_para, parse_para_schema)
 
-FINAL_PARA_DF = FORMATTED_SENT_DF.select((PARSE_PARA_UDF(F.col("value"), F.lit(para_style))).alias('metrics')).select(F.col('metrics.*'))
-FINAL_PARA_DF.count()
+AGG_PARA_DF = FORMATTED_SENT_DF.select((PARSE_PARA_UDF(F.col("value"), F.lit(para_style))).alias('metrics')).select(F.col('metrics.*'))
+AGG_PARA_DF.count()
 
-fpd = FINAL_PARA_DF.withColumn("tmp", F.arrays_zip("para_list", "para_style", "is_bold")).withColumn("tmp", F.explode("tmp")).select(F.col("tmp.para_list"), F.col("tmp.para_style"), F.col("tmp.is_bold"))
-fpd.show(1, False)
+PARA_WITH_METADATA_DF = AGG_PARA_DF.withColumn("tmp", F.arrays_zip("para_list", "para_style", "is_bold", "y_end")) \
+                   .withColumn("tmp", F.explode("tmp")) \
+                   .select(F.col("tmp.para_list"), F.col("tmp.para_style"), F.col("tmp.is_bold"), F.col("tmp.y_end"))
+PARA_WITH_METADATA_DF.show(1, False)
+PARA_WITH_METADATA_DF = PARA_WITH_METADATA_DF.withColumn("x", F.regexp_extract(F.col("para_style"), LEFT_REGEX, 3)) \
+         .withColumn("y", F.regexp_extract(F.col("para_style"),  TOP_REGEX, 3))
 
+PARA_WITH_METADATA_DF.filter("para_list is not null").count()
+PARA_WITH_METADATA_DF.show(1, False)
+PARA_WITH_METADATA_DF.filter("para_list like '62%'").show(1, False)
 
 # #############################
 # Extracting Lines from Images
 # #############################
 images_rdd = spark.sparkContext.binaryFiles(INPUT_IMAGES)
 line_coord_df = images_rdd.map(lambda img: extract_line_coords(img)).toDF()
-line_coord_exp_df =line_coord_df.select("_1", F.explode("_2"))
-line_coord_exp_df =line_coord_df.select(F.col("_1").alias("filename"), F.explode(F.col("_2")).alias("coord"))
+line_coord_exp_df = line_coord_df.select("_1", F.explode("_2"))
+line_coord_exp_df = line_coord_df.select(F.col("_1").alias("filename"), F.explode(F.col("_2")).alias("coord"))
 line_coord_exp_df.show(20, False)
