@@ -1,0 +1,1 @@
+python3 pdf_sentence_tokenizer.py --input /opt/share/corpus-files/pdfs/5889dda8-f76d-4e81-9136-cd5e137f310e/16613_2016_Judgement_16-Apr-2019.pdf --output /home/anuvaad/aravinth-test/sentence_comparison/sc_tokenized_sentences/sent.out
