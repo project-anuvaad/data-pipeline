@@ -202,11 +202,13 @@ def parse_para(x, doc_p_style):
     out_style_list = []
     out_bold_list  = []
     out_y_end_list = []
+    out_para_position_list = []
     lines = parse_array_from_string(x)
     para_text    = ''
     para_style   = ''
     prev_top_val = ''
     curr_top_val = ''
+    line_index = 0
     for line in lines:
         parts        = line.split('\t')
         l_class_val  = parts[0].strip()
@@ -231,16 +233,19 @@ def parse_para(x, doc_p_style):
                 out_para_list  += [para_text]
                 out_style_list += [para_style]
                 out_y_end_list += [curr_top_val]
+                out_para_position_list.append("start" if (line_index == 0) else "regular")
+                line_index   += 1
                 para_text = ''
             prev_top_val = ''
         else:
             para_text += l_p_text
             if(sentence_end):
                 if(para_text.strip() != ''):
-                    if(para_text.strip() != ''):
-                        out_para_list  += [para_text]
-                        out_style_list += [para_style]
-                        out_y_end_list += [curr_top_val]
+                    out_para_list  += [para_text]
+                    out_style_list += [para_style]
+                    out_y_end_list += [curr_top_val]
+                    out_para_position_list.append("start" if (line_index == 0) else "regular")
+                    line_index   += 1
                 para_text = ''
             else:
                 para_text += ' '
@@ -250,7 +255,8 @@ def parse_para(x, doc_p_style):
         out_para_list  += [para_text]
         out_style_list += [para_style]
         out_y_end_list += [curr_top_val]
-    return out_para_list, out_style_list, out_bold_list, out_y_end_list
+        out_para_position_list.append("end_incomplete")
+    return out_para_list, out_style_list, out_bold_list, out_y_end_list, out_para_position_list
 
 
 parse_para_schema = T.StructType([
@@ -258,6 +264,7 @@ parse_para_schema = T.StructType([
     T.StructField('para_style', T.ArrayType(T.StringType()), False),
     T.StructField('is_bold', T.ArrayType(T.StringType()), False),
     T.StructField('y_end', T.ArrayType(T.StringType()), False),
+    T.StructField('para_position', T.ArrayType(T.StringType()), False),
 ])
 
 PARSE_PARA_UDF = F.udf(parse_para, parse_para_schema)
@@ -265,9 +272,13 @@ PARSE_PARA_UDF = F.udf(parse_para, parse_para_schema)
 AGG_PARA_DF = FORMATTED_SENT_DF.select((PARSE_PARA_UDF(F.col("value"), F.lit(para_style))).alias('metrics')).select(F.col('metrics.*'))
 AGG_PARA_DF.count()
 
-PARA_WITH_METADATA_DF = AGG_PARA_DF.withColumn("tmp", F.arrays_zip("para_list", "para_style", "is_bold", "y_end")) \
+PARA_WITH_METADATA_DF = AGG_PARA_DF.withColumn("tmp", F.arrays_zip("para_list", "para_style", "is_bold", "y_end", "para_position")) \
                    .withColumn("tmp", F.explode("tmp")) \
-                   .select(F.col("tmp.para_list"), F.col("tmp.para_style"), F.col("tmp.is_bold"), F.col("tmp.y_end"))
+                   .select(F.col("tmp.para_list"), \
+                           F.col("tmp.para_style"), \
+                           F.col("tmp.is_bold"), \
+                           F.col("tmp.y_end"), \
+                           F.col("tmp.para_position"))
 PARA_WITH_METADATA_DF.show(1, False)
 PARA_WITH_METADATA_DF = PARA_WITH_METADATA_DF.withColumn("x", F.regexp_extract(F.col("para_style"), LEFT_REGEX, 3)) \
          .withColumn("y", F.regexp_extract(F.col("para_style"),  TOP_REGEX, 3))
