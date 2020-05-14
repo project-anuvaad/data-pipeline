@@ -12,7 +12,7 @@ from pyspark.ml import Pipeline, Model, PipelineModel
 from pyspark.ml.feature import RegexTokenizer, NGram, HashingTF, MinHashLSH
 
 from pyspark.sql.types import *
-from pyspark.sql.functions import col
+import pyspark.sql.functions as F
 
 '''
 This is the scalable ML based code for identifying the sentence similarity
@@ -29,6 +29,7 @@ SPARK SESSION CREATION
 spark = SparkSession \
     .builder \
     .appName("Sentence_Match_Tool") \
+    .enableHiveSupport() \
     .getOrCreate()
 
 
@@ -46,7 +47,8 @@ LOGGER.info("-------------------------------------------------------")
 
 # Define the Inputs
 # <filename, sentences>
-PDF_INPUT_FILE="/user/root/exact-match-score/input/2020_hashed_file_contents.txt"
+YEAR="2010"
+PDF_INPUT_FILE="/user/root/exact-match-score/input/" + YEAR + "_hashed_file_contents.txt"
 # <sentence>
 IK_INPUT_FILE="/user/root/sim-score/input/scrapped_sentences_full/ik_data_final.csv"
 
@@ -59,7 +61,9 @@ INPUT_FILE_DF    = spark.read.format("com.databricks.spark.csv") \
                   .option("header", "false") \
                   .schema(SCHEMA_PDF_INPUT_FILE) \
                   .load(PDF_INPUT_FILE)
-DF_INPUT_FILE_CLEAN    = INPUT_FILE_DF.filter("sentence rlike '[A-Z,a-z]'")
+DF_INPUT_FILE_CLEAN    = INPUT_FILE_DF.filter("sentence rlike '[A-Z,a-z]'") \
+                                      .withColumn("clean_sentence", F.regexp_replace(F.lower(F.col('sentence')), '[^a-zA-Z0-9 ]+', '')) \
+                                      .withColumn("word_count", F.size(F.split(INPUT_FILE_DF['sentence'], ' ')))
 
 SCHEMA_IK_INPUT_FILE = StructType([StructField("sentence", StringType(), True)])
 IK_FILE_DF = spark.read.format("com.databricks.spark.csv") \
@@ -69,19 +73,34 @@ IK_FILE_DF = spark.read.format("com.databricks.spark.csv") \
                   .option("header", "false") \
                   .schema(SCHEMA_IK_INPUT_FILE) \
                   .load(IK_INPUT_FILE)
-IK_FILE_DF_CLEAN    = IK_FILE_DF.filter("sentence rlike '[A-Z,a-z]'")
+IK_FILE_DF_CLEAN    = IK_FILE_DF.filter("sentence rlike '[A-Z,a-z]'") \
+                                .withColumn("clean_sentence", F.regexp_replace(F.lower(F.col('sentence')), '[^a-zA-Z0-9 ]+', '')) \
+                                .withColumn("word_count", F.size(F.split(IK_FILE_DF['sentence'], ' ')))
+
 
 # SQL Operations
 DF_INPUT_FILE_CLEAN.createOrReplaceTempView('DF_INPUT_FILE_CLEAN')
 IK_FILE_DF_CLEAN.createOrReplaceTempView('IK_FILE_DF_CLEAN')
 
-matched_df = spark.sql('select a.sentence as pdf_sentence, b.sentence as ik_sentence, hash(a.sentence) as hash_val, filename from DF_INPUT_FILE_CLEAN a, IK_FILE_DF_CLEAN b where hash(a.sentence)=hash(b.sentence)')
+q
+# ignore case matching
+matched_df = spark.sql('select a.sentence as pdf_sentence, \
+                               b.sentence as ik_sentence, \
+                               hash(a.clean_sentence) as hash_val, \
+                               filename \
+                        from \
+                            DF_INPUT_FILE_CLEAN a, \
+                            IK_FILE_DF_CLEAN b \
+                        where \
+                            hash(a.clean_sentence) = hash(b.clean_sentence) \
+                            and a.word_count > 4')
 
-matched_df.write.csv('/user/root/exact-match-score/output-temp/2020')
+
+matched_df.write.csv('/user/root/exact-match-score/output-temp/' + YEAR)
 
 # matched_df.coalesce(1).write \
 #         .format("com.databricks.spark.csv") \
 #         .option("header", "true") \
 #         .mode("overwrite") \
-#         .save("/user/root/exact-match-score/output-temp/")
+#         .save("/user/root/exact-match-score/output-temp/" + YEAR)
 
