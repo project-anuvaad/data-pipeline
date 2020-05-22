@@ -45,7 +45,7 @@ print("Output File : " + args.output)
 # Extract para API variables
 EXTRACT_PARA_FILE = args.input
 # EXTRACT_PARA_FILE ='/opt/share/corpus-files/pdfs/9289b73e-7be1-4a4a-852e-afe0270bc192/23036_2019_2_1501_20227_Judgement_04-Feb-2020.pdf'
-EXTRACT_PARA_URL  = "http://auth.anuvaad.org/extract-paragraphs"
+EXTRACT_PARA_URL  = "https://auth.anuvaad.org/extract-paragraphs"
 EXTRACT_PARA_CT   = "application/octet-stream"
 
 # Tokenize Sentence variables

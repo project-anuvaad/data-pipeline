@@ -22,7 +22,8 @@ from bs4 import BeautifulSoup
 
 from pyspark.sql import SQLContext
 from pyspark.sql import SparkSession
-from pyspark.sql.types import ArrayType, BooleanType, MapType, StringType, StructType, StructField
+from pyspark.sql import Window
+from pyspark.sql.types import ArrayType, BooleanType, MapType, StringType, StructType, StructField, IntegerType
 
 
 
@@ -64,7 +65,7 @@ VARIABLES
 ---------------------------------------
 '''
 
-CONVERTED_OUT_DIR = "/tmp/html_out/out"
+CONVERTED_OUT_DIR = "/tmp/html_out/*"
 INPUT_HTML_DOCS   = CONVERTED_OUT_DIR + "-*.html"
 INPUT_IMAGES      = CONVERTED_OUT_DIR + "*.png"
 NUM_PARTITIONS    = 10
@@ -87,14 +88,14 @@ RETRIEVE_ARRAY_UDF = F.udf(parse_array_from_string, T.ArrayType(T.StringType()))
 
 
 
-
 # Define HTML Parsing UDF
 def parse_html_tags(x):
-    map = dict()
+    page_no_list = []
+    content_list = []
     para = ''
     soup = BeautifulSoup (x, 'html.parser')
     # Extact the numeric value alone
-    map['page_no'] = str(soup.title.string).split()[1]
+    page_no_list.append(str(soup.title.string).split()[1])
     # ######################
     # MAP FOR STYLES - Extract Font size, family & color
     # ######################
@@ -116,10 +117,16 @@ def parse_html_tags(x):
         # Extract the required sections (class, mapped style, p style, actual text)
         para_reg = re.search('<p class="(.*)" style=\"(.*)\">(.*)</p>', clean_line)
         formatted_text += ['{0}\t{1}\t{2}\t{3}'.format(para_reg.group(1), style_map.get(para_reg.group(1)), para_reg.group(2), para_reg.group(3))]
-    map['formatted_text'] = str(formatted_text)
-    return map
+    content_list.append(str(formatted_text))
+    return page_no_list, content_list
 
-PARSE_HTML_TAGS_UDF = F.udf(parse_html_tags, MapType(StringType(), StringType()))
+
+parse_html_tags_schema = T.StructType([
+    T.StructField('page_no', T.ArrayType(T.StringType()), False),
+    T.StructField('contents', T.ArrayType(T.StringType()), False),
+])
+
+PARSE_HTML_TAGS_UDF = F.udf(parse_html_tags, parse_html_tags_schema)
 
 
 
@@ -174,78 +181,120 @@ SCHEMA_INPUT_FILE = StructType([StructField("filepath", StringType(), True), Str
 HTML_DF = sqlContext.createDataFrame(rdd, SCHEMA_INPUT_FILE)
 
 #Invoke the UDF to parse out the HTML tags
-APPEND_DF = HTML_DF.withColumn("metadata", PARSE_HTML_TAGS_UDF(HTML_DF.html_page_tags))
+APPEND_DF = HTML_DF.withColumn("metadata", PARSE_HTML_TAGS_UDF(HTML_DF.html_page_tags)) \
+                   .select(HTML_DF.filepath, F.col('metadata.*'))
 
-# Explode to form key-value pairs.
-EXPLODED_DF = APPEND_DF.select(APPEND_DF.filepath, F.explode(APPEND_DF.metadata))
+EXPLODED_DF = APPEND_DF.withColumn("tmp", F.arrays_zip("page_no", "contents")) \
+                   .withColumn("tmp", F.explode("tmp")) \
+                   .select(APPEND_DF.filepath, F.col("tmp.page_no"), F.col("tmp.contents"))
 
 # UDF to extract the filename from the File path
-FILENAME_EXT_UDF = F.udf(lambda x : os.path.basename(x), StringType())
-TRIM_FN_DF = EXPLODED_DF.select(FILENAME_EXT_UDF(EXPLODED_DF.filepath).alias("filename"), EXPLODED_DF.key, EXPLODED_DF.value)
+FILENAME_EXT_UDF = F.udf(lambda f : re.sub(r'(-)([0-9]*)', '', os.path.basename(f)), StringType())
+TRIM_FN_DF = EXPLODED_DF.select(FILENAME_EXT_UDF(EXPLODED_DF.filepath).alias("filename"), EXPLODED_DF.page_no, EXPLODED_DF.contents)
 
 
 # Section identifies the style of the paragraph (constant across the entire doc)
-FORMATTED_SENT_DF = TRIM_FN_DF.filter("key='formatted_text'").select("value")
-EXPLODED_SENT_DF  = FORMATTED_SENT_DF.select(F.explode(RETRIEVE_ARRAY_UDF(F.col("value"))))
+EXPLODED_SENT_DF  = TRIM_FN_DF.select("filename", "page_no", F.explode(RETRIEVE_ARRAY_UDF(F.col("contents"))))
 split_col         = F.split(EXPLODED_SENT_DF['col'], '\t')
-EXPLODED_SENT_DF  = EXPLODED_SENT_DF.withColumn('style_key', split_col.getItem(1))
-MAX_OCCURANCE_DF  = EXPLODED_SENT_DF.groupBy("style_key").count().sort(F.desc("count"))
-para_style        = MAX_OCCURANCE_DF.select('style_key').first().style_key
+EXPLODED_SENT_DF  = EXPLODED_SENT_DF.withColumn("style_key", split_col.getItem(1))
+STYLE_COUNT_DF    = EXPLODED_SENT_DF.groupBy("filename", "style_key").count()#.max().sort(F.asc("filename"), F.desc("count"))
+
+# Identify the para style for each of the PDFs.
+window            = Window.partitionBy("filename").orderBy(F.desc("count"))
+MAX_OCCURANCE_DF  = STYLE_COUNT_DF.withColumn("rank", F.rank().over(window)).filter('rank==1') \
+                                  .select("filename", F.col("style_key").alias("para_style_key"))
+                                  
+#para_style        = MAX_OCCURANCE_DF.select('filename', 'style_key').first().style_key
 
 
-# Define UDF
+LINES_WITH_STYLEID_DF = TRIM_FN_DF.join(MAX_OCCURANCE_DF, TRIM_FN_DF.filename == MAX_OCCURANCE_DF.filename) \
+                                  .select(TRIM_FN_DF.filename, TRIM_FN_DF.page_no, TRIM_FN_DF.contents, MAX_OCCURANCE_DF.para_style_key)
+#LINES_WITH_STYLEID_DF.show()
+
+
 # x is the set of lines containing class, style_key, line style & line text
 # doc_p_style is the derived paragraph style for the entire document.
-def parse_para(x, doc_p_style):
-    out_para_list = []
+def parse_para(x, page_no, doc_p_style):
+    out_para_list  = []
     # Pick the first style for the entire para
     out_style_list = []
-    out_bold_list  = []
+    out_page_num_list  = []
     out_y_end_list = []
     out_para_position_list = []
+    out_sup_list  = []
     lines = parse_array_from_string(x)
     para_text    = ''
     para_style   = ''
     prev_top_val = ''
     curr_top_val = ''
-    line_index = 0
+    processed_index = 0
+    l_class_val_list  = []
+    l_style_key_list  = []
+    l_p_style_list    = []
+    l_p_text_list     = []
+    l_top_list        = []
+    len_page = len(lines)
     for line in lines:
         parts        = line.split('\t')
-        l_class_val  = parts[0].strip()
-        l_style_key  = parts[1].strip()
-        l_p_style    = parts[2].strip()
-        l_p_text     = parts[3].strip()
+        l_class_val_list.append(parts[0].strip())
+        l_style_key_list.append(parts[1].strip())
+        l_p_style_list.append(parts[2].strip())
+        l_p_text_list.append(parts[3].strip())
+        # Extract Top Value
+        style_values = re.search(TOP_REGEX, parts[2], re.IGNORECASE)
+        if style_values:
+            l_top_list.append(style_values.group(3))
+        else:
+            l_top_list.append("-1")
+    # Logic to find last para line of the page.
+    last_line_index = len_page - 1
+    for lstyle in reversed(l_style_key_list):
+        if(lstyle == doc_p_style and l_p_text_list[last_line_index].strip()!=''):
+            break
+        last_line_index -= 1
+    for index in range(len_page):
+        l_class_val = l_class_val_list[index]
+        l_style_key = l_style_key_list[index]
+        l_p_style   = l_p_style_list[index]
+        l_p_text    = l_p_text_list[index]
         sentence_end = re.search(END_OF_SENT_REGEX, l_p_text, re.IGNORECASE)
         if(para_text == ''):
             para_style = l_p_style
-        # Extract Top Value
-        style_values = re.search(TOP_REGEX, l_p_style, re.IGNORECASE)
-        if style_values:
-            curr_top_val = style_values.group(3)
-        # Dummy for now. Fix below :
-        out_bold_list += (False,)
+        curr_top_val = l_top_list[index]
+        l_para_pos = "regular" 
+        if (processed_index == 0):
+            l_para_pos = "start"
+        elif (index == last_line_index):
+            l_para_pos = "end_complete" if (sentence_end) else "end_incomplete"
+
+        # Non-para Style Condition
         if(l_style_key != doc_p_style):
             # Case : Same line with different styles. Ex : Bold
             if(prev_top_val == curr_top_val):
                 para_text += l_p_text
                 para_text += ' '
-            elif(para_text.strip() != ''):
+            # Handling superscripts - appearing in the middle of the line
+            elif(index<len_page-1 and (l_top_list[index-1] == l_top_list[index+1])):
+                # l_p_text will be super script
+                out_sup_list.append(l_p_text)
+            elif(para_text.strip() != '' or l_para_pos == 'end_incomplete'):
                 out_para_list  += [para_text]
                 out_style_list += [para_style]
                 out_y_end_list += [curr_top_val]
-                out_para_position_list.append("start" if (line_index == 0) else "regular")
-                line_index   += 1
+                out_para_position_list.append(l_para_pos)
+                processed_index+= 1
                 para_text = ''
             prev_top_val = ''
+        # Para Style Condition
         else:
             para_text += l_p_text
-            if(sentence_end):
+            if(sentence_end or l_para_pos == 'end_incomplete'):
                 if(para_text.strip() != ''):
                     out_para_list  += [para_text]
                     out_style_list += [para_style]
                     out_y_end_list += [curr_top_val]
-                    out_para_position_list.append("start" if (line_index == 0) else "regular")
-                    line_index   += 1
+                    out_para_position_list.append(l_para_pos)
+                    processed_index += 1
                 para_text = ''
             else:
                 para_text += ' '
@@ -256,42 +305,97 @@ def parse_para(x, doc_p_style):
         out_style_list += [para_style]
         out_y_end_list += [curr_top_val]
         out_para_position_list.append("end_incomplete")
-    return out_para_list, out_style_list, out_bold_list, out_y_end_list, out_para_position_list
+    return out_para_list, out_style_list, out_page_num_list, out_y_end_list, out_para_position_list
 
 
 parse_para_schema = T.StructType([
     T.StructField('para_list', T.ArrayType(T.StringType()), False),
     T.StructField('para_style', T.ArrayType(T.StringType()), False),
-    T.StructField('is_bold', T.ArrayType(T.StringType()), False),
+    T.StructField('page_num', T.ArrayType(T.StringType()), False),
     T.StructField('y_end', T.ArrayType(T.StringType()), False),
     T.StructField('para_position', T.ArrayType(T.StringType()), False),
 ])
 
 PARSE_PARA_UDF = F.udf(parse_para, parse_para_schema)
 
-AGG_PARA_DF = FORMATTED_SENT_DF.select((PARSE_PARA_UDF(F.col("value"), F.lit(para_style))).alias('metrics')).select(F.col('metrics.*'))
-AGG_PARA_DF.count()
+AGG_PARA_DF = LINES_WITH_STYLEID_DF.select(F.col("filename"), \
+                                           F.col("page_no"), \
+                                           (PARSE_PARA_UDF(F.col("contents"), F.col("page_no"), F.col("para_style_key"))).alias('metrics')) \
+                                   .select("filename","page_no", F.col('metrics.*'))
 
-PARA_WITH_METADATA_DF = AGG_PARA_DF.withColumn("tmp", F.arrays_zip("para_list", "para_style", "is_bold", "y_end", "para_position")) \
+
+PARA_WITH_METADATA_DF = AGG_PARA_DF.withColumn("tmp", F.arrays_zip("para_list", "para_style", "page_num", "y_end", "para_position")) \
                    .withColumn("tmp", F.explode("tmp")) \
-                   .select(F.col("tmp.para_list"), \
+                   .select(F.col("filename"), \
+                           F.col("page_no"), \
+                           F.col("tmp.para_list"), \
                            F.col("tmp.para_style"), \
-                           F.col("tmp.is_bold"), \
+                           F.col("tmp.page_num"), \
                            F.col("tmp.y_end"), \
                            F.col("tmp.para_position"))
-PARA_WITH_METADATA_DF.show(1, False)
+
 PARA_WITH_METADATA_DF = PARA_WITH_METADATA_DF.withColumn("x", F.regexp_extract(F.col("para_style"), LEFT_REGEX, 3)) \
          .withColumn("y", F.regexp_extract(F.col("para_style"),  TOP_REGEX, 3))
 
-PARA_WITH_METADATA_DF.filter("para_list is not null").count()
-PARA_WITH_METADATA_DF.show(1, False)
-PARA_WITH_METADATA_DF.filter("para_list like '62%'").show(1, False)
+# Handle the sentences that are spanning across pages.
+FIRST_LAST_PARA_DF = PARA_WITH_METADATA_DF.filter('para_position=="start" or para_position=="end_incomplete"')
+P_DF1_ALIAS = FIRST_LAST_PARA_DF.alias('df1')
+P_DF2_ALIAS = FIRST_LAST_PARA_DF.alias('df2')
+INTERSECTION_SENT_DF = P_DF1_ALIAS.join(P_DF2_ALIAS, F.col("df1.page_no").cast(IntegerType()) == (F.col("df2.page_no").cast(IntegerType()) + 1)) \
+                        .select(F.col("df1.filename").alias("f1_filename"), 
+                                F.col("df1.page_no").alias("f1_page_no"), 
+                                F.col("df1.para_list").alias("f1_para_list"), 
+                                F.col("df1.y_end").alias("f1_y_end"), 
+                                F.col("df1.para_position").alias("f1_para_position"),
+                                F.col("df1.para_style").alias("f1_para_style"),
+                                F.col("df1.x").alias("f1_x"),
+                                F.col("df1.y").alias("f1_y"),
+                                F.col("df2.filename").alias("f2_filename"), 
+                                F.col("df2.page_no").alias("f2_page_no"), 
+                                F.col("df2.para_list").alias("f2_para_list"), 
+                                F.col("df2.y_end").alias("f2_y_end"), 
+                                F.col("df2.para_position").alias("f2_para_position"), 
+                                F.col("df2.para_style").alias("f2_para_style"),
+                                F.col("df2.x").alias("f2_x"),
+                                F.col("df2.y").alias("f2_y")) \
+                        .filter('f1_filename == f2_filename and f1_para_position == "start" and f2_para_position == "end_incomplete"') \
+                        .withColumn('complete_para', F.concat(F.col('f2_para_list'), F.lit(' '), F.col('f1_para_list')))
+
+
+# Regular para - contained within same page.
+REG_PARA_DF   = PARA_WITH_METADATA_DF.filter('para_position NOT IN ("start","end_incomplete")')
+
+# Split para - contained across multiple pages.
+SPLIT_PARA_DF = INTERSECTION_SENT_DF.select(
+                                        F.col("f2_filename").alias("filename"),
+                                        F.col("f2_page_no").alias("page_no"),
+                                        F.col("complete_para").alias("para_list"),
+                                        F.col("f2_para_style").alias("para_style"),
+                                        F.col("f2_page_no").alias("page_num"),
+                                        F.col("f1_y_end").alias("y_end"),
+                                        F.col("f2_para_position").alias("para_position"),
+                                        F.col("f1_x").alias("x"),
+                                        F.col("f1_y").alias("y")
+                                    )
+
+# Aggregate the regular para & the split para.
+UNION_PARA_DF = REG_PARA_DF.union(SPLIT_PARA_DF)
+
+# Output in required format
+UNION_PARA_DF.filter("para_list IS NOT NULL and filename=='out.html'").select("para_list").coalesce(1).write \
+        .format("com.databricks.spark.csv") \
+        .option("header", "true") \
+        .mode("overwrite") \
+        .save("/tmp/output")
+
+
+
 
 # #############################
 # Extracting Lines from Images
 # #############################
-images_rdd = spark.sparkContext.binaryFiles(INPUT_IMAGES)
-line_coord_df = images_rdd.map(lambda img: extract_line_coords(img)).toDF()
-line_coord_exp_df = line_coord_df.select("_1", F.explode("_2"))
-line_coord_exp_df = line_coord_df.select(F.col("_1").alias("filename"), F.explode(F.col("_2")).alias("coord"))
-line_coord_exp_df.show(20, False)
+# images_rdd = spark.sparkContext.binaryFiles(INPUT_IMAGES)
+# line_coord_df = images_rdd.map(lambda img: extract_line_coords(img)).toDF()
+# line_coord_exp_df = line_coord_df.select("_1", F.explode("_2"))
+# line_coord_exp_df = line_coord_df.select(F.col("_1").alias("filename"), F.explode(F.col("_2")).alias("coord"))
+# line_coord_exp_df.show(20, False)
