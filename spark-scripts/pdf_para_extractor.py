@@ -66,7 +66,7 @@ VARIABLES
 '''
 
 CONVERTED_OUT_DIR = "/tmp/html_out/*"
-INPUT_HTML_DOCS   = CONVERTED_OUT_DIR + "-*.html"
+INPUT_HTML_DOCS   = CONVERTED_OUT_DIR + "--*.html"
 INPUT_IMAGES      = CONVERTED_OUT_DIR + "*.png"
 NUM_PARTITIONS    = 10
 # Define Regex
@@ -189,7 +189,7 @@ EXPLODED_DF = APPEND_DF.withColumn("tmp", F.arrays_zip("page_no", "contents")) \
                    .select(APPEND_DF.filepath, F.col("tmp.page_no"), F.col("tmp.contents"))
 
 # UDF to extract the filename from the File path
-FILENAME_EXT_UDF = F.udf(lambda f : re.sub(r'(-)([0-9]*)', '', os.path.basename(f)), StringType())
+FILENAME_EXT_UDF = F.udf(lambda f : re.match(r'(.*/)(.*)(--[0-9]*)(\.html)', f).group(2), StringType())
 TRIM_FN_DF = EXPLODED_DF.select(FILENAME_EXT_UDF(EXPLODED_DF.filepath).alias("filename"), EXPLODED_DF.page_no, EXPLODED_DF.contents)
 
 
@@ -197,7 +197,7 @@ TRIM_FN_DF = EXPLODED_DF.select(FILENAME_EXT_UDF(EXPLODED_DF.filepath).alias("fi
 EXPLODED_SENT_DF  = TRIM_FN_DF.select("filename", "page_no", F.explode(RETRIEVE_ARRAY_UDF(F.col("contents"))))
 split_col         = F.split(EXPLODED_SENT_DF['col'], '\t')
 EXPLODED_SENT_DF  = EXPLODED_SENT_DF.withColumn("style_key", split_col.getItem(1))
-STYLE_COUNT_DF    = EXPLODED_SENT_DF.groupBy("filename", "style_key").count()#.max().sort(F.asc("filename"), F.desc("count"))
+STYLE_COUNT_DF    = EXPLODED_SENT_DF.groupBy("filename", "style_key").count()
 
 # Identify the para style for each of the PDFs.
 window            = Window.partitionBy("filename").orderBy(F.desc("count"))
@@ -394,7 +394,7 @@ UNION_PARA_DF.filter("para_list IS NOT NULL and filename=='out.html'").select("p
 # ######################################
 # Extracting Footer lines from Images
 # ######################################
-N_FILENAME_EXT_UDF = F.udf(lambda f : re.match(r'(.*)(-)(0*)(.*)(\.png)', f).group(4), StringType())
+IMG_FILENAME_UTILS_UDF = F.udf(lambda f,n : re.match(r'(.*)(-)(0*)(.*)(\.png)', f).group(n), StringType())
 
 images_rdd = spark.sparkContext.binaryFiles(INPUT_IMAGES)
 line_coord_df = images_rdd.map(lambda img: extract_line_coords(img)).toDF()
@@ -402,8 +402,8 @@ line_coord_df = images_rdd.map(lambda img: extract_line_coords(img)).toDF()
 line_coord_exp_df = line_coord_df.select(F.col("_1").alias("filename"), \
                                          F.explode(F.col("_2")).alias("coord"))
 line_coord_exp_df = line_coord_exp_df.select(F.col("filename"), \
-                                         FILENAME_EXT_UDF(F.col("filename")).alias("actual_filename"), \
-                                         N_FILENAME_EXT_UDF(F.col("filename")).alias("page_num"), \
+                                         IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(1)).alias("file_id"), \
+                                         IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(4)).alias("page_num"), \
                                          F.col("coord._1").alias("x"), \
                                          F.col("coord._2").alias("y"), \
                                          F.col("coord._3").alias("w"), \
@@ -412,17 +412,19 @@ line_coord_exp_df.createOrReplaceTempView('line_coord_exp_df')
 # Condition for Footer line.
 footer_list = spark.sql("""
                 SELECT 
-                  actual_filename, page_num, x, w, 
-                  COUNT(*) cnt, 
-                  MIN(y) min_y, 
-                  MAX(y) max_y 
+                  file_id, page_num, x, w, 
+                  COUNT(*) cnt,
+                  MIN(y) min_y,
+                  MAX(y) max_y
                 FROM line_coord_exp_df 
-                GROUP BY actual_filename, page_num, x, w 
+                GROUP BY file_id, page_num, x, w 
                 HAVING (min_y > 1000 and (cnt==1 OR max_y-min_y>150)) 
-                ORDER BY actual_filename ASC, cast(page_num AS int) ASC
+                ORDER BY file_id ASC, cast(page_num AS int) ASC
             """).collect()
 ftr = spark.sparkContext.broadcast(footer_list)
 
 
-line_coord_exp_df.show(20, False)
+for f in footer_list:
+  print("{0}\t{1}\t{2}".format(f.file_id, f.page_num, f.min_y))
+
 
