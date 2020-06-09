@@ -203,7 +203,7 @@ STYLE_COUNT_DF    = EXPLODED_SENT_DF.groupBy("filename", "style_key").count()
 window            = Window.partitionBy("filename").orderBy(F.desc("count"))
 MAX_OCCURANCE_DF  = STYLE_COUNT_DF.withColumn("rank", F.rank().over(window)).filter('rank==1') \
                                   .select("filename", F.col("style_key").alias("para_style_key"))
-                                  
+
 #para_style        = MAX_OCCURANCE_DF.select('filename', 'style_key').first().style_key
 
 
@@ -212,9 +212,49 @@ LINES_WITH_STYLEID_DF = TRIM_FN_DF.join(MAX_OCCURANCE_DF, TRIM_FN_DF.filename ==
 #LINES_WITH_STYLEID_DF.show()
 
 
+
+# ######################################
+# Extracting Footer lines from Images
+# ######################################
+IMG_FILENAME_UTILS_UDF = F.udf(lambda f,n : re.match(r'(.*)(-)(0*)(.*)(\.png)', f).group(n), StringType())
+
+images_rdd = spark.sparkContext.binaryFiles(INPUT_IMAGES)
+line_coord_df = images_rdd.map(lambda img: extract_line_coords(img)).toDF()
+#line_coord_exp_df = line_coord_df.select("_1", F.explode("_2"))
+line_coord_exp_df = line_coord_df.select(F.col("_1").alias("filename"), \
+                                         F.explode(F.col("_2")).alias("coord"))
+line_coord_exp_df = line_coord_exp_df.select(F.col("filename"), \
+                                         IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(1)).alias("file_id"), \
+                                         IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(4)).alias("page_num"), \
+                                         F.col("coord._1").alias("x"), \
+                                         F.col("coord._2").alias("y"), \
+                                         F.col("coord._3").alias("w"), \
+                                         F.col("coord._4").alias("h"))
+line_coord_exp_df.createOrReplaceTempView('line_coord_exp_df')
+# Condition for Footer line.
+footer_list = spark.sql("""
+                SELECT 
+                  file_id, page_num, x, w, 
+                  COUNT(*) cnt,
+                  MIN(y) min_y,
+                  MAX(y) max_y
+                FROM line_coord_exp_df 
+                GROUP BY file_id, page_num, x, w 
+                HAVING (min_y > 1000 and (cnt==1 OR max_y-min_y>150)) 
+                ORDER BY file_id ASC, cast(page_num AS int) ASC
+            """).collect()
+ftr = spark.sparkContext.broadcast(footer_list)
+
+footer_coord_lookup = dict()
+for f in footer_list:
+    #print("{0}\t{1}\t{2}".format(f.file_id, f.page_num, f.min_y))
+    footer_coord_lookup[f.file_id + "#" + str(f.page_num)] = f.min_y
+
+
+
 # content is the set of lines containing class, style_key, line style & line text
 # doc_p_style is the derived paragraph style for the entire document.
-def parse_para(content, page_no, doc_p_style):
+def parse_para(content, file_id, page_no, doc_p_style):
     out_para_list  = []
     # Pick the first style for the entire para
     out_style_list = []
@@ -233,7 +273,11 @@ def parse_para(content, page_no, doc_p_style):
     l_p_style_list    = []
     l_p_text_list     = []
     l_top_list        = []
-    len_page = len(lines)
+    len_page          = len(lines)
+    f_min_y           = "-1"
+    footer_key        = file_id + "#" + str(page_no)
+    if footer_key in footer_coord_lookup.keys():
+        f_min_y = footer_coord_lookup[footer_key]
     for line in lines:
         parts        = line.split('\t')
         l_class_val_list.append(parts[0].strip())
@@ -266,9 +310,29 @@ def parse_para(content, page_no, doc_p_style):
             l_para_pos = "start"
         elif (index == last_line_index):
             l_para_pos = "end_complete" if (sentence_end) else "end_incomplete"
+        elif (int(f_min_y) > 0 and int(curr_top_val) > int(f_min_y)):
+            l_para_pos = "footer"
+
+        if (l_p_text.strip() == ''):
+            continue
+        # Handle Footer
+        elif (int(curr_top_val) > int(f_min_y)):
+            #print("DEBUG : {} {} {} {}".format(index, len_page, l_p_text.strip(), page_no))
+            if (index==len_page - 1):
+              # Ignore the page number
+              if(l_p_text.strip() != page_no):
+                para_text += l_p_text
+              
+              out_para_list  += [para_text]
+              out_style_list += [para_style]
+              out_y_end_list += [curr_top_val]
+              out_para_position_list.append(l_para_pos)
+            else:
+                para_text += l_p_text
+                para_text += ' '
 
         # Non-para Style Condition
-        if(l_style_key != doc_p_style):
+        elif (l_style_key != doc_p_style):
             # Case : Same line with different styles. Ex : Bold
             if(prev_top_val == curr_top_val):
                 para_text += l_p_text
@@ -320,7 +384,7 @@ PARSE_PARA_UDF = F.udf(parse_para, parse_para_schema)
 
 AGG_PARA_DF = LINES_WITH_STYLEID_DF.select(F.col("filename"), \
                                            F.col("page_no"), \
-                                           (PARSE_PARA_UDF(F.col("contents"), F.col("page_no"), F.col("para_style_key"))).alias('metrics')) \
+                                           (PARSE_PARA_UDF(F.col("contents"), F.col("filename"), F.col("page_no"), F.col("para_style_key"))).alias('metrics')) \
                                    .select("filename","page_no", F.col('metrics.*'))
 
 
@@ -391,40 +455,7 @@ UNION_PARA_DF.filter("para_list IS NOT NULL and filename=='out.html'").select("p
 
 
 
-# ######################################
-# Extracting Footer lines from Images
-# ######################################
-IMG_FILENAME_UTILS_UDF = F.udf(lambda f,n : re.match(r'(.*)(-)(0*)(.*)(\.png)', f).group(n), StringType())
-
-images_rdd = spark.sparkContext.binaryFiles(INPUT_IMAGES)
-line_coord_df = images_rdd.map(lambda img: extract_line_coords(img)).toDF()
-#line_coord_exp_df = line_coord_df.select("_1", F.explode("_2"))
-line_coord_exp_df = line_coord_df.select(F.col("_1").alias("filename"), \
-                                         F.explode(F.col("_2")).alias("coord"))
-line_coord_exp_df = line_coord_exp_df.select(F.col("filename"), \
-                                         IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(1)).alias("file_id"), \
-                                         IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(4)).alias("page_num"), \
-                                         F.col("coord._1").alias("x"), \
-                                         F.col("coord._2").alias("y"), \
-                                         F.col("coord._3").alias("w"), \
-                                         F.col("coord._4").alias("h"))
-line_coord_exp_df.createOrReplaceTempView('line_coord_exp_df')
-# Condition for Footer line.
-footer_list = spark.sql("""
-                SELECT 
-                  file_id, page_num, x, w, 
-                  COUNT(*) cnt,
-                  MIN(y) min_y,
-                  MAX(y) max_y
-                FROM line_coord_exp_df 
-                GROUP BY file_id, page_num, x, w 
-                HAVING (min_y > 1000 and (cnt==1 OR max_y-min_y>150)) 
-                ORDER BY file_id ASC, cast(page_num AS int) ASC
-            """).collect()
-ftr = spark.sparkContext.broadcast(footer_list)
 
 
-for f in footer_list:
-  print("{0}\t{1}\t{2}".format(f.file_id, f.page_num, f.min_y))
 
 
