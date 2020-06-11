@@ -111,7 +111,13 @@ def parse_html_tags(x):
     formatted_text = []
     for line in soup.find_all("p"):
         # Remove unwanted tags
-        clean_line = str(line).replace('<br/>','').replace('<i>','').replace('<i/>','')
+        clean_line = str(line).replace('<br/>','') \
+                              .replace('<i>','') \
+                              .replace('<i/>','') \
+                              .replace('</i>','') \
+                              .replace('<b>','') \
+                              .replace('</b>','') \
+                              .replace('<b/>','')
         # Make the sentence single-spaced and remove leading/trailing spaces
         clean_line = ' '.join(clean_line.split()).strip()
         # Extract the required sections (class, mapped style, p style, actual text)
@@ -300,6 +306,7 @@ def parse_para(content, file_id, page_no, doc_p_style):
         l_class_val = l_class_val_list[index]
         l_style_key = l_style_key_list[index]
         l_p_style   = l_p_style_list[index]
+        l_next_p_style   = l_style_key_list[index+1] if (index<len_page-1) else "-1"
         l_p_text    = l_p_text_list[index]
         sentence_end = re.search(END_OF_SENT_REGEX, l_p_text, re.IGNORECASE)
         if(para_text == ''):
@@ -312,13 +319,16 @@ def parse_para(content, file_id, page_no, doc_p_style):
             l_para_pos = "end_complete" if (sentence_end) else "end_incomplete"
         elif (int(f_min_y) > 0 and int(curr_top_val) > int(f_min_y)):
             l_para_pos = "footer"
+        
 
-        if (l_p_text.strip() == ''):
+        # Case 1 : Ignore Header (including Page No.)
+        if (index <= 3 and (int(curr_top_val) < 75 or int(curr_top_val) > 1100)):
+            # Page No. Condition : (l_p_text.strip() == page_no)
+            # Other Hdr Condition : (l_p_text.strip() != page_no)
             continue
-        # Handle Footer
-        elif (int(curr_top_val) > int(f_min_y)):
-            #print("DEBUG : {} {} {} {}".format(index, len_page, l_p_text.strip(), page_no))
-            if (index==len_page - 1):
+        # Case 2 : Handle Footer
+        elif (int(f_min_y) > 0 and int(curr_top_val) > int(f_min_y)):
+            if (index == len_page - 1):
               # Ignore the page number
               if(l_p_text.strip() != page_no):
                 para_text += l_p_text
@@ -330,18 +340,28 @@ def parse_para(content, file_id, page_no, doc_p_style):
             else:
                 para_text += l_p_text
                 para_text += ' '
-
-        # Non-para Style Condition
+        # Case 3 : Non-para Style Condition
         elif (l_style_key != doc_p_style):
-            # Case : Same line with different styles. Ex : Bold
-            if(prev_top_val == curr_top_val):
+            if (para_text == ''):
+                para_text += l_p_text
+            elif (prev_top_val == curr_top_val \
+                   or sentence_end \
+                   or l_style_key == l_style_key_list[index-1] \
+                   or abs(int(l_top_list[index-1]) - int(l_top_list[index])) < 5):
                 para_text += l_p_text
                 para_text += ' '
+                
             # Handling superscripts - appearing in the middle of the line
-            elif(index<len_page-1 and (l_top_list[index-1] == l_top_list[index+1])):
-                # l_p_text will be super script
+            if (para_text.strip()==''):
+                continue
+            # Case : super script    
+            elif (index<len_page-1 and (l_top_list[index-1] == l_top_list[index+1])):
                 out_sup_list.append(l_p_text)
-            elif(para_text.strip() != '' or l_para_pos == 'end_incomplete'):
+            # Case : Sentence ends, but paragraph continues
+            elif (sentence_end and l_style_key == l_style_key_list[index+1] and l_para_pos != 'end_incomplete' ):
+                continue
+            # Case for writing the output
+            elif (l_para_pos == 'end_incomplete' or sentence_end or l_next_p_style == doc_p_style):
                 out_para_list  += [para_text]
                 out_style_list += [para_style]
                 out_y_end_list += [curr_top_val]
@@ -349,9 +369,10 @@ def parse_para(content, file_id, page_no, doc_p_style):
                 processed_index+= 1
                 para_text = ''
             prev_top_val = ''
-        # Para Style Condition
+        # Case 4 : Para Style Condition
         else:
             para_text += l_p_text
+            # Case : Sentence ends or reaches end of page
             if(sentence_end or l_para_pos == 'end_incomplete'):
                 if(para_text.strip() != ''):
                     out_para_list  += [para_text]
@@ -405,6 +426,7 @@ PARA_WITH_METADATA_DF = PARA_WITH_METADATA_DF.withColumn("x", F.regexp_extract(F
 FIRST_LAST_PARA_DF = PARA_WITH_METADATA_DF.filter('para_position=="start" or para_position=="end_incomplete"')
 P_DF1_ALIAS = FIRST_LAST_PARA_DF.alias('df1')
 P_DF2_ALIAS = FIRST_LAST_PARA_DF.alias('df2')
+
 INTERSECTION_SENT_DF = P_DF1_ALIAS.join(P_DF2_ALIAS, F.col("df1.page_no").cast(IntegerType()) == (F.col("df2.page_no").cast(IntegerType()) + 1)) \
                         .select(F.col("df1.filename").alias("f1_filename"), 
                                 F.col("df1.page_no").alias("f1_page_no"), 
@@ -444,6 +466,8 @@ SPLIT_PARA_DF = INTERSECTION_SENT_DF.select(
 
 # Aggregate the regular para & the split para.
 UNION_PARA_DF = REG_PARA_DF.union(SPLIT_PARA_DF)
+
+# UNION_PARA_DF.filter("filename='ex2'").select("page_no", "para_position", "para_list").orderBy(["page_no"], ascending=True).show(500, False)
 
 # Output in required format
 UNION_PARA_DF.filter("para_list IS NOT NULL and filename=='out.html'").select("para_list").coalesce(1).write \
