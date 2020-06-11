@@ -74,7 +74,7 @@ END_OF_SENT_REGEX = """(([\"|”|,|a-zA-Z|0-9|.]{3,}[.|?|!|\"|”|:|;]|([:][ ][-
 STYLE_REGEX       = """.(.*){(.*)font-size:([0-9]*)px;(.*)font-family:(.*);(.*)color:(.*);(.*)"""
 TOP_REGEX         = """(.*)(top:)([0-9]*)(.*)"""
 LEFT_REGEX        = """(.*)(left:)([0-9]*)(.*)"""
-
+PAGE_NUM_POSSIBLE_FRMT = """(Page|page)(\s)([0-9]*)(\s)(of)(\s)([0-9]*)"""
 
 # Define sql Context
 sqlContext = SQLContext(sparkContext=spark.sparkContext, sparkSession=spark)
@@ -316,18 +316,28 @@ def parse_para(content, file_id, page_no, doc_p_style):
         next_top_val = int(l_top_list[index+1]) if (index<len_page-1) else -1
 
         l_para_pos = "regular" 
-        if (processed_index == 0):
+        if (curr_top_val < 75):
+            l_para_pos = "header"
+        elif (processed_index == 0):
             l_para_pos = "start"
         elif (index == last_line_index):
             l_para_pos = "end_complete" if (sentence_end) else "end_incomplete"
-        elif (int(f_min_y) > 0 and curr_top_val > int(f_min_y)):
+        elif (curr_top_val > 1175 or (int(f_min_y) > 0 and curr_top_val > int(f_min_y))):
             l_para_pos = "footer"
 
         # Case 1 : Ignore Header (including Page No.)
-        if (index <= 3 and (curr_top_val < 75 or curr_top_val > 1100)):
-            # Page No. Condition : (l_p_text.strip() == page_no)
-            # Other Hdr Condition : (l_p_text.strip() != page_no)
-            continue
+        if ((index <= 3 or (len_page-index) <= 3) and (curr_top_val < 75 or curr_top_val > 1175)):
+            # Page number Format
+            if(re.match(PAGE_NUM_POSSIBLE_FRMT, l_p_text) or l_p_text.strip() == page_no or l_p_text.strip() == ''):
+                continue
+            else:
+              para_text += l_p_text
+            
+            out_para_list  += [para_text]
+            out_style_list += [para_style]
+            out_y_end_list += [curr_top_val]
+            out_para_position_list.append(l_para_pos)
+            para_text = ''
         # Case 2 : Handle Footer
         elif (int(f_min_y) > 0 and curr_top_val > int(f_min_y)):
             if (index == len_page - 1):
