@@ -271,7 +271,7 @@ def parse_para(content, file_id, page_no, doc_p_style):
     lines = parse_array_from_string(content)
     para_text    = ''
     para_style   = ''
-    prev_top_val = ''
+    indexed_prev_top_val = -1
     curr_top_val = ''
     processed_index = 0
     l_class_val_list  = []
@@ -311,23 +311,25 @@ def parse_para(content, file_id, page_no, doc_p_style):
         sentence_end = re.search(END_OF_SENT_REGEX, l_p_text, re.IGNORECASE)
         if(para_text == ''):
             para_style = l_p_style
-        curr_top_val = l_top_list[index]
+        curr_top_val = int(l_top_list[index])
+        prev_top_val = int(l_top_list[index-1])
+        next_top_val = int(l_top_list[index+1]) if (index<len_page-1) else -1
+
         l_para_pos = "regular" 
         if (processed_index == 0):
             l_para_pos = "start"
         elif (index == last_line_index):
             l_para_pos = "end_complete" if (sentence_end) else "end_incomplete"
-        elif (int(f_min_y) > 0 and int(curr_top_val) > int(f_min_y)):
+        elif (int(f_min_y) > 0 and curr_top_val > int(f_min_y)):
             l_para_pos = "footer"
-        
 
         # Case 1 : Ignore Header (including Page No.)
-        if (index <= 3 and (int(curr_top_val) < 75 or int(curr_top_val) > 1100)):
+        if (index <= 3 and (curr_top_val < 75 or curr_top_val > 1100)):
             # Page No. Condition : (l_p_text.strip() == page_no)
             # Other Hdr Condition : (l_p_text.strip() != page_no)
             continue
         # Case 2 : Handle Footer
-        elif (int(f_min_y) > 0 and int(curr_top_val) > int(f_min_y)):
+        elif (int(f_min_y) > 0 and curr_top_val > int(f_min_y)):
             if (index == len_page - 1):
               # Ignore the page number
               if(l_p_text.strip() != page_no):
@@ -344,21 +346,22 @@ def parse_para(content, file_id, page_no, doc_p_style):
         elif (l_style_key != doc_p_style):
             if (para_text == ''):
                 para_text += l_p_text
-            elif (prev_top_val == curr_top_val \
+            elif (indexed_prev_top_val == curr_top_val \
                    or sentence_end \
                    or l_style_key == l_style_key_list[index-1] \
-                   or abs(int(l_top_list[index-1]) - int(l_top_list[index])) < 5):
+                   or abs(prev_top_val - next_top_val) < 5):
                 para_text += l_p_text
                 para_text += ' '
-                
+            
+
             # Handling superscripts - appearing in the middle of the line
             if (para_text.strip()==''):
                 continue
-            # Case : super script    
-            elif (index<len_page-1 and (l_top_list[index-1] == l_top_list[index+1])):
+            # Case : super script
+            elif (index<len_page-1 and prev_top_val==next_top_val):
                 out_sup_list.append(l_p_text)
             # Case : Sentence ends, but paragraph continues
-            elif (sentence_end and l_style_key == l_style_key_list[index+1] and l_para_pos != 'end_incomplete' ):
+            elif (sentence_end and l_style_key == l_next_p_style and l_para_pos != 'end_incomplete' ):
                 continue
             # Case for writing the output
             elif (l_para_pos == 'end_incomplete' or sentence_end or l_next_p_style == doc_p_style):
@@ -368,7 +371,7 @@ def parse_para(content, file_id, page_no, doc_p_style):
                 out_para_position_list.append(l_para_pos)
                 processed_index+= 1
                 para_text = ''
-            prev_top_val = ''
+            indexed_prev_top_val = -1
         # Case 4 : Para Style Condition
         else:
             para_text += l_p_text
@@ -383,7 +386,7 @@ def parse_para(content, file_id, page_no, doc_p_style):
                 para_text = ''
             else:
                 para_text += ' '
-            prev_top_val = curr_top_val
+            indexed_prev_top_val = curr_top_val
     # Flush remaining para
     if(para_text.strip() != ''):
         out_para_list  += [para_text]
