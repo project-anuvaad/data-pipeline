@@ -75,6 +75,10 @@ STYLE_REGEX       = """.(.*){(.*)font-size:([0-9]*)px;(.*)font-family:(.*);(.*)c
 TOP_REGEX         = """(.*)(top:)([0-9]*)(.*)"""
 LEFT_REGEX        = """(.*)(left:)([0-9]*)(.*)"""
 PAGE_NUM_POSSIBLE_FRMT = """(Page|page)(\s)([0-9]*)(\s)(of)(\s)([0-9]*)"""
+ABBRIVATIONS2 = [' no.', ' mr.', ' ft.', ' kg.', ' dr.', ' ms.', ' st.', ' pp.', ' co.', ' rs.', ' sh.', ' vs.', ' ex.']
+ABBRIVATIONS3 = [' pvt.', ' nos.', ' smt.', ' sec.', ' spl.', ' kgs.', ' ltd.', ' pty.', ' vol.', ' pty.', ' m/s.', ' mrs.', ' i.e.', ' etc.', ' (ex.', ' o.s.', ' anr.', ' ors.', ' c.a.']
+ABBRIVATIONS4 = [' assn.']
+ABBRIVATIONS6 = [' w.e.f.']
 
 # Define sql Context
 sqlContext = SQLContext(sparkContext=spark.sparkContext, sparkSession=spark)
@@ -308,13 +312,16 @@ def parse_para(content, file_id, page_no, doc_p_style):
         l_p_style   = l_p_style_list[index]
         l_next_p_style   = l_style_key_list[index+1] if (index<len_page-1) else "-1"
         l_p_text    = l_p_text_list[index]
-        sentence_end = re.search(END_OF_SENT_REGEX, l_p_text, re.IGNORECASE)
+        sentence_end = re.search(END_OF_SENT_REGEX, l_p_text, re.IGNORECASE) and not \
+                            (l_p_text[-4:] in ABBRIVATIONS2 \
+                            or l_p_text[-5:] in ABBRIVATIONS3 \
+                            or l_p_text[-6:] in ABBRIVATIONS4 \
+                            or l_p_text[-7:] in ABBRIVATIONS6)
         if(para_text == ''):
             para_style = l_p_style
         curr_top_val = int(l_top_list[index])
         prev_top_val = int(l_top_list[index-1])
         next_top_val = int(l_top_list[index+1]) if (index<len_page-1) else -1
-
         l_para_pos = "regular" 
         if (curr_top_val < 75):
             l_para_pos = "header"
