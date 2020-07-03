@@ -11,7 +11,7 @@ import pyspark.sql.functions as F
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, ArrayType,StringType
 from googletrans import Translator
-import hbase_spark as hbase
+import tool2_hbase_util as hbase
 import csv
 import requests
 import json
@@ -96,7 +96,7 @@ LOGGER.info('=======================================================')
 Import the hbase-integration module
 ------------------------------------------------------
 '''
-sc.addFile("hbase_spark.py")
+sc.addFile("tool2_hbase_util.py")
 
 '''
 ------------------------------------------------------
