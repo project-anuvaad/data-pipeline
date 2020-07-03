@@ -19,7 +19,7 @@ Get config values from yml file
 '''
 #hbase_server = ANUVAAD_INPUT_CONFIG[hbase_server]
 #hbase_table = ANUVAAD_INPUT_CONFIG[hbase_table]
-hbase_server = "sandbox-hdp.hortonworks.com"
+hbase_server = "node1.anuvaad.dev"
 hbase_table = "translated_sentences"
 
 
