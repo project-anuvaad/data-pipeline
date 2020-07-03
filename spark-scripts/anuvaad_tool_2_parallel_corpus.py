@@ -18,7 +18,7 @@ import json
 import sys
 from pyspark import SparkConf, SparkContext
 from pyspark.sql.functions import regexp_extract, input_file_name
-from ruamel import yaml
+import yaml
 import subprocess
 from pyspark.sql.functions import udf
 '''
