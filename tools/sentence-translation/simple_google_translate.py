@@ -10,7 +10,7 @@ import requests
 
 headers = {
     'Content-Type': 'application/json',
-    'Authorization': 'Bearer ya29.c.Ko8B0gcknmEzX545_8ruNEh0TRzFXayqxyRH-jlpjgBflZniz7Fmq3oPDrAqMfT9iPFAdhqIOoJ8B2Zlz7WgYtBdbwXMjQFhPekmfk9mxkXhhWWvdfUi4PnUn4VeR0DmFsNo4qkbpl78kjCET3jQx7-InO0Hjv7bSt5rIG5ZCIiWnWqA_FyrG1bISJR_0XlAo4s',
+    'Authorization': 'Bearer XXXXXXXXXXXXX',
 }
 
 
