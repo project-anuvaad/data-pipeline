@@ -45,11 +45,11 @@ print("Output File : " + args.output)
 # Extract para API variables
 EXTRACT_PARA_FILE = args.input
 # EXTRACT_PARA_FILE ='/opt/share/corpus-files/pdfs/9289b73e-7be1-4a4a-852e-afe0270bc192/23036_2019_2_1501_20227_Judgement_04-Feb-2020.pdf'
-EXTRACT_PARA_URL  = "https://auth.anuvaad.org/extract-paragraphs"
+EXTRACT_PARA_URL  = "https://auth.anuvaad.org/v1/interactive-editor/extract-paragraphs"
 EXTRACT_PARA_CT   = "application/octet-stream"
 
 # Tokenize Sentence variables
-TOKENIZE_SENT_URL = "http://auth.anuvaad.org/tokenize-sentence"
+TOKENIZE_SENT_URL = "https://auth.anuvaad.org/v2/tokenize-sentence"
 TOKENIZE_SENT_HEADERS = {
   'Content-Type': 'application/json',
   'Authorization': 'Bearer a8fc0a28d4f447e58cfacabaf5625022|8abc26848d1240568176439af85a5f9d'
@@ -74,7 +74,8 @@ try:
       TOKENIZE_SENT_PAYLOAD += """", "page_no":"""
       TOKENIZE_SENT_PAYLOAD += str(line['page_no'])
       TOKENIZE_SENT_PAYLOAD += """
-                               }]}
+                               }],
+                               "lang": "English"}
                                """    
       ts_response = requests.request("POST", TOKENIZE_SENT_URL, headers=TOKENIZE_SENT_HEADERS, data=TOKENIZE_SENT_PAYLOAD.encode('utf-8'))
       ts_resp_json = json.loads(ts_response.content)

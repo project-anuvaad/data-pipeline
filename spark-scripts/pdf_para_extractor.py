@@ -27,6 +27,7 @@ from pyspark.sql.types import ArrayType, BooleanType, MapType, StringType, Struc
 
 
 
+
 '''
 This is the scalable framework for the paragraph extraction process from PDF for 
 Anuvaad pipeline. The code reads the input pdf files and converts into HTML files 
@@ -65,8 +66,13 @@ VARIABLES
 ---------------------------------------
 '''
 
-CONVERTED_OUT_DIR = "/tmp/html_out/*"
-INPUT_HTML_DOCS   = CONVERTED_OUT_DIR + "--*.html"
+CONVERTED_OUT_DIR = "/Users/TIMAC044/Documents/Anuvaad/converted_htmls/ex1/*"
+ # Util class for identifying a rectangle
+RECT_UTIL    = '/Users/TIMAC044/Documents/Anuvaad/table-detection/rect.py'
+# Util class for identifying a rectangle
+TABLE_UTIL   = '/Users/TIMAC044/Documents/Anuvaad/table-detection/table.py'
+
+INPUT_HTML_DOCS   = CONVERTED_OUT_DIR + "--25.html"
 INPUT_IMAGES      = CONVERTED_OUT_DIR + "*.png"
 NUM_PARTITIONS    = 10
 # Define Regex
@@ -79,6 +85,10 @@ ABBRIVATIONS2 = [' no.', ' mr.', ' ft.', ' kg.', ' dr.', ' ms.', ' st.', ' pp.',
 ABBRIVATIONS3 = [' pvt.', ' nos.', ' smt.', ' sec.', ' spl.', ' kgs.', ' ltd.', ' pty.', ' vol.', ' pty.', ' m/s.', ' mrs.', ' i.e.', ' etc.', ' (ex.', ' o.s.', ' anr.', ' ors.', ' c.a.']
 ABBRIVATIONS4 = [' assn.']
 ABBRIVATIONS6 = [' w.e.f.']
+
+# Add Util classes to the Spark Context
+spark.sparkContext.addPyFile(RECT_UTIL)
+spark.sparkContext.addPyFile(TABLE_UTIL)
 
 # Define sql Context
 sqlContext = SQLContext(sparkContext=spark.sparkContext, sparkSession=spark)
@@ -227,20 +237,20 @@ LINES_WITH_STYLEID_DF = TRIM_FN_DF.join(MAX_OCCURANCE_DF, TRIM_FN_DF.filename ==
 # Extracting Footer lines from Images
 # ######################################
 IMG_FILENAME_UTILS_UDF = F.udf(lambda f,n : re.match(r'(.*)(-)(0*)(.*)(\.png)', f).group(n), StringType())
+IMAGES_RDD = spark.sparkContext.binaryFiles(INPUT_IMAGES)
 
-images_rdd = spark.sparkContext.binaryFiles(INPUT_IMAGES)
-line_coord_df = images_rdd.map(lambda img: extract_line_coords(img)).toDF()
-#line_coord_exp_df = line_coord_df.select("_1", F.explode("_2"))
-line_coord_exp_df = line_coord_df.select(F.col("_1").alias("filename"), \
+LINE_COORD_DF = IMAGES_RDD.map(lambda img: extract_line_coords(img)).toDF()
+#LINE_COORD_EXP_DF = LINE_COORD_DF.select("_1", F.explode("_2"))
+LINE_COORD_EXP_DF = LINE_COORD_DF.select(F.col("_1").alias("filename"), \
                                          F.explode(F.col("_2")).alias("coord"))
-line_coord_exp_df = line_coord_exp_df.select(F.col("filename"), \
+LINE_COORD_EXP_DF = LINE_COORD_EXP_DF.select(F.col("filename"), \
                                          IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(1)).alias("file_id"), \
                                          IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(4)).alias("page_num"), \
                                          F.col("coord._1").alias("x"), \
                                          F.col("coord._2").alias("y"), \
                                          F.col("coord._3").alias("w"), \
                                          F.col("coord._4").alias("h"))
-line_coord_exp_df.createOrReplaceTempView('line_coord_exp_df')
+LINE_COORD_EXP_DF.createOrReplaceTempView('line_coord_exp_df')
 # Condition for Footer line.
 footer_list = spark.sql("""
                 SELECT 
@@ -260,6 +270,87 @@ for f in footer_list:
     #print("{0}\t{1}\t{2}".format(f.file_id, f.page_num, f.min_y))
     footer_coord_lookup[f.file_id + "#" + str(f.page_num)] = f.min_y
 
+
+# ######################################
+# Extracting Tables from Images
+# ######################################
+
+def extract_table_coords(image):
+  from rect import RectRepositories
+  from table import TableRepositories
+  name, img       = image
+  pil_image       = Image.open(io.BytesIO(img)).convert('RGB') 
+  open_cv_image   = numpy.array(pil_image) 
+  open_cv_image  = open_cv_image[:, :, ::-1].copy() 
+  Rects           = RectRepositories(open_cv_image)
+  lines, _        = Rects.get_tables_and_lines ()
+  table           = None
+  TableRepo       = TableRepositories(open_cv_image, table)
+  tables          = TableRepo.response ['response'] ['tables']
+  lines           = []
+  for table in tables:
+    base_x = int(table.get('x'))
+    base_y = int(table.get('y'))
+    for t in table.get('rect'):
+      x = base_x + int(t['x'])
+      y = base_y + int(t['y'])
+      w = int(t['w'])
+      h = int(t['h'])
+      row = int(t['row'])
+      col = int(t['col'])
+      lines.append((row, col, x, y, w, h))
+  return os.path.basename(name), lines
+
+# For each of the images, extract the coordinates along with row & column
+TABLE_COORD_DF       = IMAGES_RDD.map(lambda img: extract_table_coords(img)).toDF()
+
+# Explode the cells (one row per cell)
+TABLE_COORD_EXP_DF   = TABLE_COORD_DF.select(F.col("_1").alias("filename"), \
+                                         F.explode(F.col("_2")).alias("coord"))
+# Final view
+FINAL_TABLE_COORD_DF = TABLE_COORD_EXP_DF.select("filename", \
+                                    IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(1)).alias("file_id"), \
+                                    IMG_FILENAME_UTILS_UDF(F.col("filename"), F.lit(4)).alias("page_num"), \
+                                    F.col("coord._1").alias("row"), \
+                                    F.col("coord._2").alias("col"), \
+                                    F.col("coord._3").alias("x"), \
+                                    F.col("coord._4").alias("y"), \
+                                    F.col("coord._5").alias("w"), \
+                                    F.col("coord._6").alias("h"))
+
+# FINAL_TABLE_COORD_DF.show(500, False)
+FINAL_TABLE_COORD_DF.createOrReplaceTempView('final_table_coord_df')
+
+table_list = spark.sql("""
+                SELECT 
+                  file_id, page_num, row, col, x, y, w, h
+                FROM 
+                  final_table_coord_df 
+                ORDER BY 
+                  file_id ASC, cast(page_num AS int) ASC, y ASC
+            """).collect()
+tlist = spark.sparkContext.broadcast(table_list)
+
+table_coord_lookup = dict()
+for f in table_list:
+    #print("{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}".format(f.file_id, f.page_num, f.row, f.col, f.x, f.y, f.w, f.h))
+    cell_record = dict()
+    cell_record['row'] = f.row
+    cell_record['col'] = f.col
+    cell_record['x']   = f.x
+    cell_record['y']   = f.y
+    cell_record['w']   = f.w
+    cell_record['h']   = f.h
+    lookup_key = f.file_id + "#" + str(f.page_num)
+    # if key is already available, append the cell record to the list.
+    if lookup_key in table_coord_lookup:
+        existing_list = table_coord_lookup[lookup_key]
+        existing_list.append(cell_record)
+    # else create a new list with the cell record and insert into the lookup.
+    else:
+        cell_list = list()
+        cell_list.append(cell_record)
+        table_coord_lookup[lookup_key] = cell_list
 
 
 # content is the set of lines containing class, style_key, line style & line text
@@ -283,11 +374,18 @@ def parse_para(content, file_id, page_no, doc_p_style):
     l_p_style_list    = []
     l_p_text_list     = []
     l_top_list        = []
+    l_left_list       = []
     len_page          = len(lines)
     f_min_y           = "-1"
-    footer_key        = file_id + "#" + str(page_no)
-    if footer_key in footer_coord_lookup.keys():
-        f_min_y = footer_coord_lookup[footer_key]
+    table_coords      = list()
+    img_page_key      = file_id + "#" + str(page_no)
+    is_table          = False
+    # Header
+    if img_page_key in footer_coord_lookup.keys():
+        f_min_y = footer_coord_lookup[img_page_key]
+    # Table
+    if img_page_key in table_coord_lookup.keys():
+        table_coords = table_coord_lookup[img_page_key]
     for line in lines:
         parts        = line.split('\t')
         l_class_val_list.append(parts[0].strip())
@@ -300,6 +398,12 @@ def parse_para(content, file_id, page_no, doc_p_style):
             l_top_list.append(style_values.group(3))
         else:
             l_top_list.append("-1")
+        # Extract Left Value
+        style_values = re.search(LEFT_REGEX, parts[2], re.IGNORECASE)
+        if style_values:
+            l_left_list.append(style_values.group(3))
+        else:
+            l_left_list.append("-1")
     # Logic to find last para line of the page.
     last_line_index = len_page - 1
     for lstyle in reversed(l_style_key_list):
@@ -322,7 +426,21 @@ def parse_para(content, file_id, page_no, doc_p_style):
         curr_top_val = int(l_top_list[index])
         prev_top_val = int(l_top_list[index-1])
         next_top_val = int(l_top_list[index+1]) if (index<len_page-1) else -1
+
+        # Code added for table
+        text_contained_within_table = False
+        curr_left_val = int(l_left_list[index])
+        prev_text_available_cell = dict()
+        text_available_cell = dict()
+        for coord in table_coords:
+          if (curr_top_val >= coord['y'] and curr_top_val <= (coord['y'] + coord['h'])):
+            text_contained_within_table = True
+            text_available_cell = coord
+            break
+
         l_para_pos = "regular" 
+        if (text_contained_within_table):
+            l_para_pos = "table"
         if (curr_top_val < 75):
             l_para_pos = "header"
         elif (processed_index == 0):
@@ -338,7 +456,7 @@ def parse_para(content, file_id, page_no, doc_p_style):
             if(re.match(PAGE_NUM_POSSIBLE_FRMT, l_p_text) or l_p_text.strip() == page_no or l_p_text.strip() == ''):
                 continue
             else:
-              para_text += l_p_text
+                para_text += l_p_text
             
             out_para_list  += [para_text]
             out_style_list += [para_style]
@@ -357,10 +475,34 @@ def parse_para(content, file_id, page_no, doc_p_style):
               out_y_end_list += [curr_top_val]
               out_para_position_list.append(l_para_pos)
             else:
-                para_text += l_p_text
-                para_text += ' '
+              para_text += l_p_text
+              para_text += ' '
+        # Case : Table contents
+        elif (len(table_coords) > 0 and text_contained_within_table):
+            # Cond 1 : When the table is starting, flush all the contents before it
+            # Cond 2 : When content is not continuation within the same cell, flush it
+            if (not is_table or not (text_available_cell['x']==prev_text_available_cell['x'] and text_available_cell['y']==prev_text_available_cell['y'])):
+                out_para_list  += [para_text]
+                out_style_list += [para_style]
+                out_y_end_list += [curr_top_val]
+                out_para_position_list.append(l_para_pos)
+                # Reset
+                is_table = True
+                para_text = ''
+                prev_text_available_cell = text_available_cell
+            para_text += l_p_text
+            para_text += ' '
+            print("Table content : " + str(curr_top_val) + " :: " + str(coord['y']) + " :: " + str(coord['h']) + " :: " + para_text)
         # Case 3 : Non-para Style Condition
         elif (l_style_key != doc_p_style):
+            # Condition : Previous line was end of table
+            if (is_table):
+                out_para_list  += [para_text]
+                out_style_list += [para_style]
+                out_y_end_list += [curr_top_val]
+                out_para_position_list.append(l_para_pos)
+                is_table = False
+                para_text = ''
             if (para_text == ''):
                 para_text += l_p_text
             elif (indexed_prev_top_val == curr_top_val \
@@ -391,6 +533,14 @@ def parse_para(content, file_id, page_no, doc_p_style):
             indexed_prev_top_val = -1
         # Case 4 : Para Style Condition
         else:
+            # Condition : Previous line was end of table
+            if (is_table):
+                out_para_list  += [para_text]
+                out_style_list += [para_style]
+                out_y_end_list += [curr_top_val]
+                out_para_position_list.append(l_para_pos)
+                is_table = False
+                para_text = ''
             para_text += l_p_text
             # Case : Sentence ends or reaches end of page
             if(sentence_end or l_para_pos == 'end_incomplete'):
