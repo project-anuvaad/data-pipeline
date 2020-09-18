@@ -59,7 +59,7 @@ mb_url = "https://auth.anuvaad.org/api/v0/merge-blocks-wf"
 download_url = "https://auth.anuvaad.org/download/"
 
 lang_locale = args.locale
-auth_key = 'Bearer e7ae81eec6104149a054d8a2305f84a4|5d23a0f912284668b73201bb4604f32e'
+auth_key = "Enter your token here"
 
 
 print("\nStarting to post the extract-paragraphs API call...")

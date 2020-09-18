@@ -58,7 +58,7 @@ EXTRACT_PARA_FILE = args.input
 input_pdf_file = args.input
 lang_locale    = args.locale
 output_file    = args.output
-auth_key    = 'Bearer ba2e2695dee04adc8ad432b63813870f|0db2a72b91cd483b9e771e1e67563858'
+auth_key = "Enter your token here"
 
 # DEFINE API endpoints
 base_url       = "https://auth.anuvaad.org/" 
@@ -113,7 +113,7 @@ uploaded_pdf_name = upload_response.json()["data"]
 #####################################
 payload = "{\r\n\"files\": [ {\r\n\"locale\": \"input_locale\",\r\n\"path\": \"input_path\",\r\n\"type\": \"pdf\"\r\n}\r\n],\r\n\"workflowCode\": \"DP_WFLOW_BT\"\r\n}"
 headers = {
-  'Authorization': 'Bearer ba2e2695dee04adc8ad432b63813870f|0db2a72b91cd483b9e771e1e67563858',
+  'Authorization': auth_key,
   'Content-Type': 'application/json'
 }
 
