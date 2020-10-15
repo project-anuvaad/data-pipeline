@@ -1,4 +1,4 @@
-# python3 pdf_to_para.py --input /Users/TIMAC044/Documents/HC_Data/Processing_Input/en/allahabad_hc_2001_ST187_en.pdf --output /Users/TIMAC044/Documents/HC_Data/Processing_Output/en/allahabad_hc_2001_ST187_en.pdf.txt --locale en
+# python3 pdf_to_para_wfm.py --input "/Users/TIMAC044/Documents/HC_Data/Allahabad_HC/allahabad_hc_2016_JA2946_hi.pdf" --output "/Users/TIMAC044/Documents/HC_Data/Allahabad_HC/allahabad_hc_2016_JA2946_hi.pdf.txt" --locale "hi"
 
 
 # -*- coding: utf-8 -*-
@@ -111,7 +111,7 @@ uploaded_pdf_name = upload_response.json()["data"]
 #####################################
 # INITIATE BM WFM
 #####################################
-payload = "{\r\n\"files\": [ {\r\n\"locale\": \"input_locale\",\r\n\"path\": \"input_path\",\r\n\"type\": \"pdf\"\r\n}\r\n],\r\n\"workflowCode\": \"DP_WFLOW_BT\"\r\n}"
+payload = "{\r\n\"files\": [ {\r\n\"locale\": \"input_locale\",\r\n\"path\": \"input_path\",\r\n\"type\": \"pdf\"\r\n}\r\n],\r\n\"workflowCode\": \"DP_WFLOW_FBT\"\r\n}"
 headers = {
   'Authorization': auth_key,
   'Content-Type': 'application/json'
@@ -151,7 +151,7 @@ with open(output_file, 'w', encoding = 'utf-8') as f:
     for block in s_line['text_blocks']:
       for sentences in block['tokenized_sentences']:
         if(sentences is not None):
-            f.write(sentences['src_text'] + '\n')
+            f.write(sentences['src'] + '\n')
 
 
 
