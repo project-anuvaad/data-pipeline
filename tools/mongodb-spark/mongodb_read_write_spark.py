@@ -41,6 +41,7 @@ def main():
                     .config('spark.jars.packages', 'org.mongodb.spark:mongo-spark-connector_2.11-2.4.0') \
                     .getOrCreate()
 
+    # WRITE TO MONGODB
     testpeople = spark.createDataFrame([("JULIA", "50"),
                                         ("Gandalf", "1000"),
                                         ("Thorin", "195"),
@@ -61,6 +62,7 @@ def main():
           .save()
 
 
+    # READ FROM MONGODB
     df = spark.read\
           .format("com.mongodb.spark.sql.DefaultSource")\
           .option("database", "anuvaad")\
@@ -70,6 +72,37 @@ def main():
     df.show()
 
     df.select('*').where(col("firstname") == "JULIA").show()
+
+
+    # UPDATE MONGODB
+    upd_id = "5f7fec1648f90e8313281c74"
+    df.filter(df._id.oid == upd_id) .show()
+    
+    schema = StructType().add("_id", StructType().add("oid", StringType())) \
+                         .add("firstname", StringType()) \
+                         .add("lastname", StringType())
+    
+    df1 = spark.createDataFrame(
+        [
+            {
+              "_id": {
+                 "oid": upd_id
+              },
+              "firstname" : "Aravinth_Updated",
+              "lastname" : "Bheemaraj_Updated",
+            }
+        ],
+        schema
+    )
+    
+    df1.write\
+          .format("com.mongodb.spark.sql.DefaultSource")\
+          .mode("append")\
+          .option("database", "anuvaad")\
+          .option("collection", "testpeople")\
+          .option("replaceDocument", "false")\
+          .save()
+
 
 if __name__ == "__main__":
     main()
