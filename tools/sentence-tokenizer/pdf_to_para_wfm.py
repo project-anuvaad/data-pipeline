@@ -1,4 +1,4 @@
-# python3 pdf_to_para_wfm.py --input "/Users/TIMAC044/Documents/HC_Data/Allahabad_HC/allahabad_hc_2016_JA2946_hi.pdf" --output "/Users/TIMAC044/Documents/HC_Data/Allahabad_HC/allahabad_hc_2016_JA2946_hi.pdf.txt" --locale "hi"
+# python3 pdf_to_para_wfm.py --input "/Users/TIMAC044/Downloads/SUVAS_FILES_UNICODE/1/cfa100_2004_pc_en.docx" --output "/Users/TIMAC044/Downloads/SUVAS_FILES_UNICODE/1/cfa100_2004_pc_en.docx.txt" --locale "en"
 
 
 # -*- coding: utf-8 -*-
@@ -62,9 +62,9 @@ auth_key = "Enter your token here"
 
 # DEFINE API endpoints
 base_url       = "https://auth.anuvaad.org/" 
-upload_url     = base_url + "api/v0/upload-file"
+upload_url     = base_url + "anuvaad-api/file-uploader/v0/upload-file"
 mb_url         = base_url + "api/v0/merge-blocks-wf"
-wfm_url        = base_url + "anuvaad-etl/wf-manager/v1/workflow/initiate"
+wfm_url        = base_url + "anuvaad-etl/wf-manager/v1/workflow/async/initiate"
 job_status_url = base_url + "anuvaad-etl/wf-manager/v1/workflow/jobs/search/bulk"
 download_url   = base_url + "download/"
 
@@ -85,7 +85,7 @@ def get_tokenization_result(job_id):
     rsp = r.json()
     # print(rsp)
     if rsp is not None and len(rsp) > 0:
-        if rsp[0]['status'] == 'COMPLETED':
+        if rsp["jobs"][0]["status"] == 'COMPLETED':
             return True, rsp
     return False, rsp
 
@@ -111,7 +111,7 @@ uploaded_pdf_name = upload_response.json()["data"]
 #####################################
 # INITIATE BM WFM
 #####################################
-payload = "{\r\n\"files\": [ {\r\n\"locale\": \"input_locale\",\r\n\"path\": \"input_path\",\r\n\"type\": \"pdf\"\r\n}\r\n],\r\n\"workflowCode\": \"DP_WFLOW_FBT\"\r\n}"
+payload = "{\r\n\"files\": [ {\r\n\"locale\": \"input_locale\",\r\n\"path\": \"input_path\",\r\n\"type\": \"pdf\"\r\n}\r\n],\r\n\"workflowCode\": \"WF_A_FCBMTK\"\r\n}"
 headers = {
   'Authorization': auth_key,
   'Content-Type': 'application/json'
@@ -129,15 +129,16 @@ prev_status = ''
 output_json = ''
 while(1):
     status, rsp = get_tokenization_result(input_jobid)
-    if(rsp[0]['status'] != prev_status):
-        prev_status = rsp[0]['status']
+    curr_status = rsp['jobs'][0]['status']
+    if(curr_status != prev_status):
+        prev_status = curr_status
         print(prev_status)
     if status:
         print('jobId %s, completed successfully' % input_jobid)
-        output_json = rsp[0]['output'][0]['outputFile']
+        output_json = rsp['jobs'][0]['output'][0]['outputFile']
         break
     else:
-        print('jobId %s, still running, waiting for 10 seconds' % input_jobid)
+        print('jobId %s, still running, waiting for 30 seconds' % input_jobid)
         time.sleep(30)
 # print(output_json)
 
